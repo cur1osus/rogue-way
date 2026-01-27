@@ -1,0 +1,27 @@
+name: build-windows
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build (release)
+        run: cargo build --release
+
+      - name: Prepare dist
+        run: |
+          mkdir dist
+          copy target\release\*.exe dist\
+          xcopy assets dist\assets\ /E /I /Y
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: merchants-menagerie-windows
+          path: dist
