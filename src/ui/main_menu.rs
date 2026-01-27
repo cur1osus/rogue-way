@@ -1,3 +1,4 @@
+use crate::constants::{ui_colors, ui_text, UI_FONT_SCALE};
 use crate::resources::UiFonts;
 use crate::ui::GameState;
 use bevy::app::AppExit;
@@ -65,7 +66,7 @@ pub fn setup_main_menu(
 
     // Фоновый градиент
     commands.spawn((
-        Sprite::from_color(Color::srgb(0.15, 0.12, 0.18), Vec2::new(1920.0, 1080.0)),
+        Sprite::from_color(ui_colors::MENU_BACKGROUND, Vec2::new(1920.0, 1080.0)),
         Transform::from_xyz(0.0, 0.0, -10.0),
         MenuSprite,
     ));
@@ -74,7 +75,7 @@ pub fn setup_main_menu(
     commands.spawn((
         Sprite {
             image: asset_server.load("sprites/Buildings/Purple Buildings/Castle.png"),
-            color: Color::srgba(0.6, 0.5, 0.7, 0.4),
+            color: ui_colors::MENU_ACCENT,
             ..default()
         },
         Transform::from_xyz(0.0, -150.0, -5.0).with_scale(Vec3::splat(1.5)),
@@ -192,30 +193,30 @@ pub fn setup_main_menu(
                                 margin: UiRect::bottom(Val::Px(20.0)),
                                 ..default()
                             },
-                            BackgroundColor(Color::srgba(0.12, 0.1, 0.18, 0.9)),
+                            BackgroundColor(ui_colors::PANEL_PURPLE),
                         ))
                         .with_children(|banner_parent| {
                             // Название игры поверх баннера
                             banner_parent.spawn((
-                                Text::new("MERCHANT'S MENAGERIE"),
+                                Text::new(ui_text::GAME_TITLE),
                                 TextFont {
                                     font: font.clone(),
-                                    font_size: 48.0,
+                                    font_size: 48.0 * UI_FONT_SCALE,
                                     ..default()
                                 },
-                                TextColor(Color::srgb(1.0, 0.84, 0.0)),
+                                TextColor(ui_colors::TEXT_GOLD),
                             ));
                         });
 
                     // Подзаголовок
                     top_parent.spawn((
-                        Text::new("Bullet Heaven Roguelike"),
+                        Text::new(ui_text::GAME_SUBTITLE),
                         TextFont {
                             font: font.clone(),
-                            font_size: 26.0,
+                            font_size: 26.0 * UI_FONT_SCALE,
                             ..default()
                         },
-                        TextColor(Color::srgb(0.9, 0.9, 1.0)),
+                        TextColor(ui_colors::TEXT_PURPLE_LIGHT),
                         Node {
                             margin: UiRect::bottom(Val::Px(10.0)),
                             ..default()
@@ -243,19 +244,19 @@ pub fn setup_main_menu(
                                 align_items: AlignItems::Center,
                                 ..default()
                             },
-                            BackgroundColor(Color::srgb(0.18, 0.36, 0.7)),
+                            BackgroundColor(ui_colors::BUTTON_BLUE),
                             PlayButton,
-                            ButtonBaseColor(Color::srgb(0.18, 0.36, 0.7)),
+                            ButtonBaseColor(ui_colors::BUTTON_BLUE),
                         ))
                         .with_children(|button_parent| {
                             button_parent.spawn((
-                                Text::new("⚔ ИГРАТЬ ⚔"),
+                                Text::new(ui_text::BTN_PLAY),
                                 TextFont {
                                     font: font.clone(),
-                                    font_size: 38.0,
+                                    font_size: 38.0 * UI_FONT_SCALE,
                                     ..default()
                                 },
-                                TextColor(Color::srgb(1.0, 1.0, 1.0)),
+                                TextColor(ui_colors::TEXT_WHITE),
                             ));
                         });
 
@@ -270,19 +271,19 @@ pub fn setup_main_menu(
                                 align_items: AlignItems::Center,
                                 ..default()
                             },
-                            BackgroundColor(Color::srgb(0.7, 0.22, 0.22)),
+                            BackgroundColor(ui_colors::BUTTON_RED),
                             QuitButton,
-                            ButtonBaseColor(Color::srgb(0.7, 0.22, 0.22)),
+                            ButtonBaseColor(ui_colors::BUTTON_RED),
                         ))
                         .with_children(|button_parent| {
                             button_parent.spawn((
-                                Text::new("ВЫХОД"),
+                                Text::new(ui_text::BTN_EXIT),
                                 TextFont {
                                     font: font.clone(),
-                                    font_size: 34.0,
+                                    font_size: 34.0 * UI_FONT_SCALE,
                                     ..default()
                                 },
-                                TextColor(Color::srgb(1.0, 1.0, 1.0)),
+                                TextColor(ui_colors::TEXT_WHITE),
                             ));
                         });
                 });
@@ -296,13 +297,13 @@ pub fn setup_main_menu(
                 })
                 .with_children(|bottom_parent| {
                     bottom_parent.spawn((
-                        Text::new("Собирай питомцев • Уничтожай врагов • Развивай торговца"),
+                        Text::new(ui_text::GAME_DESCRIPTION),
                         TextFont {
                             font: font.clone(),
-                            font_size: 18.0,
+                            font_size: 18.0 * UI_FONT_SCALE,
                             ..default()
                         },
-                        TextColor(Color::srgb(0.7, 0.7, 0.8)),
+                        TextColor(ui_colors::TEXT_GRAY),
                     ));
                 });
         });

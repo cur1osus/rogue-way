@@ -105,7 +105,7 @@ pub fn setup_camera(mut commands: Commands) {
                     Color::srgb(brightness, brightness, brightness),
                     Vec2::new(4.0, 4.0),
                 ),
-                Transform::from_xyz(pos_x, pos_y, 0.1),
+                Transform::from_xyz(pos_x, pos_y, -10.0),
             ));
         }
     }

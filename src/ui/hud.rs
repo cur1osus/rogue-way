@@ -1,6 +1,7 @@
 use crate::components::{
     AttackRange, Boss, Experience, Gold, Health, Hitbox, MovementSpeed, Pet, Player, Team,
 };
+use crate::constants::{ui_colors, ui_text, UI_FONT_SCALE};
 use crate::resources::{UiFonts, UpgradeState, WaveConfig};
 use bevy::math::primitives::{Circle, Rectangle};
 use bevy::prelude::*;
@@ -131,9 +132,9 @@ impl FromWorld for AttackRangeVisualAssets {
             let mut materials = world.resource_mut::<Assets<ColorMaterial>>();
 
             let mesh = meshes.add(Mesh::from(Circle::new(1.0)));
-            let friendly_material = materials.add(Color::srgba(0.2, 0.8, 1.0, 0.18));
-            let enemy_material = materials.add(Color::srgba(1.0, 0.3, 0.3, 0.15));
-            let neutral_material = materials.add(Color::srgba(0.8, 0.8, 0.8, 0.12));
+            let friendly_material = materials.add(ui_colors::ZONE_FRIENDLY);
+            let enemy_material = materials.add(ui_colors::ZONE_ENEMY);
+            let neutral_material = materials.add(ui_colors::ZONE_NEUTRAL);
 
             Self {
                 mesh,
@@ -151,7 +152,7 @@ impl FromWorld for HitboxVisualAssets {
             let mut materials = world.resource_mut::<Assets<ColorMaterial>>();
 
             let mesh = meshes.add(Mesh::from(Rectangle::new(1.0, 1.0)));
-            let material = materials.add(Color::srgba(0.2, 1.0, 0.6, 0.18));
+            let material = materials.add(ui_colors::ZONE_XP);
 
             Self { mesh, material }
         })
@@ -173,13 +174,13 @@ pub fn setup_hud(
     // HP текст (сверху слева)
     commands.spawn((
         HudUI,
-        Text::new("ОЗ: 100/100"),
+        Text::new(ui_text::format_health(100.0, 100.0)),
         TextFont {
             font: font.clone(),
-            font_size: 24.0,
+            font_size: 24.0 * UI_FONT_SCALE,
             ..default()
         },
-        TextColor(Color::srgb(1.0, 0.3, 0.3)),
+        TextColor(ui_colors::TEXT_RED),
         Node {
             position_type: PositionType::Absolute,
             left: Val::Px(10.0),
@@ -192,13 +193,13 @@ pub fn setup_hud(
     // Таймер (сверху по центру)
     commands.spawn((
         HudUI,
-        Text::new("Время: 0:00"),
+        Text::new(ui_text::format_time(0, 0)),
         TextFont {
             font: font.clone(),
-            font_size: 28.0,
+            font_size: 28.0 * UI_FONT_SCALE,
             ..default()
         },
-        TextColor(Color::srgb(1.0, 1.0, 1.0)),
+        TextColor(ui_colors::TEXT_WHITE),
         Node {
             position_type: PositionType::Absolute,
             left: Val::Percent(45.0),
@@ -211,13 +212,13 @@ pub fn setup_hud(
     // XP текст (внизу по центру)
     commands.spawn((
         HudUI,
-        Text::new("Уровень 1 | Опыт: 0/100"),
+        Text::new(ui_text::format_level_xp(1, 0, 100)),
         TextFont {
             font: font.clone(),
-            font_size: 20.0,
+            font_size: 20.0 * UI_FONT_SCALE,
             ..default()
         },
-        TextColor(Color::srgb(0.3, 0.8, 1.0)),
+        TextColor(ui_colors::TEXT_CYAN),
         Node {
             position_type: PositionType::Absolute,
             left: Val::Percent(40.0),
@@ -230,13 +231,13 @@ pub fn setup_hud(
     // Золото (сверху справа)
     commands.spawn((
         HudUI,
-        Text::new("Золото: 0"),
+        Text::new(ui_text::format_gold(0)),
         TextFont {
             font: font.clone(),
-            font_size: 24.0,
+            font_size: 24.0 * UI_FONT_SCALE,
             ..default()
         },
-        TextColor(Color::srgb(1.0, 0.84, 0.0)), // Золотой цвет
+        TextColor(ui_colors::TEXT_GOLD),
         Node {
             position_type: PositionType::Absolute,
             right: Val::Px(10.0),
@@ -291,20 +292,21 @@ pub fn ui_update_system(
     // Обновляем HP, XP и золото
     if let Ok((health, experience, gold)) = player_query.single() {
         if let Ok(mut text) = hp_text_query.single_mut() {
-            text.0 = format!("ОЗ: {:.0}/{:.0}", health.current, health.max);
+            text.0 = ui_text::format_hud_health(health.current, health.max);
         }
 
         // Обновляем XP
         if let Ok(mut text) = xp_text_query.single_mut() {
-            text.0 = format!(
-                "Уровень {} | Опыт: {}/{}",
-                experience.level, experience.current, experience.to_next_level
+            text.0 = ui_text::format_hud_level_xp(
+                experience.level,
+                experience.current,
+                experience.to_next_level,
             );
         }
 
         // Обновляем золото
         if let Ok(mut text) = gold_text_query.single_mut() {
-            text.0 = format!("Золото: {}", gold.amount);
+            text.0 = ui_text::format_hud_gold(gold.amount);
         }
     }
 
@@ -313,7 +315,7 @@ pub fn ui_update_system(
         let total_seconds = wave_config.game_time as u32;
         let minutes = total_seconds / 60;
         let seconds = total_seconds % 60;
-        text.0 = format!("Время: {}:{:02}", minutes, seconds);
+        text.0 = ui_text::format_hud_time(minutes, seconds);
     }
 }
 
@@ -353,10 +355,10 @@ pub fn boss_health_bar_system(
                     Text::new(boss.boss_type.get_name()),
                     TextFont {
                         font: font.clone(),
-                        font_size: 24.0,
+                        font_size: 24.0 * UI_FONT_SCALE,
                         ..default()
                     },
-                    TextColor(Color::srgb(1.0, 0.2, 0.2)),
+                    TextColor(ui_colors::TEXT_RED_DARK),
                     BossNameText,
                 ));
 
@@ -377,7 +379,7 @@ pub fn boss_health_bar_system(
                                 height: Val::Percent(100.0),
                                 ..default()
                             },
-                            BackgroundColor(Color::srgb(0.8, 0.1, 0.1)),
+                            BackgroundColor(ui_colors::HP_BAR),
                         ));
                     });
             });
@@ -486,20 +488,20 @@ pub fn stats_panel_system(
                 row_gap: Val::Px(5.0),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.85)),
+            BackgroundColor(ui_colors::OVERLAY_DARKER),
             StatsPanel,
             HudUI,
         ))
         .with_children(|parent| {
             // Заголовок
             parent.spawn((
-                Text::new("СТАТИСТИКА"),
+                Text::new(ui_text::STATS_TITLE),
                 TextFont {
                     font: font.clone(),
-                    font_size: 22.0,
+                    font_size: 22.0 * UI_FONT_SCALE,
                     ..default()
                 },
-                TextColor(Color::srgb(1.0, 1.0, 0.3)),
+                TextColor(ui_colors::TEXT_YELLOW_LIGHT),
                 Node {
                     margin: UiRect::bottom(Val::Px(10.0)),
                     ..default()
@@ -514,87 +516,87 @@ pub fn stats_panel_system(
                     margin: UiRect::bottom(Val::Px(10.0)),
                     ..default()
                 },
-                BackgroundColor(Color::srgb(0.5, 0.5, 0.5)),
+                BackgroundColor(ui_colors::SEPARATOR),
             ));
 
             // Статы игрока
             parent.spawn((
-                Text::new(format!("ОЗ: {:.0}/{:.0}", health.current, health.max)),
+                Text::new(ui_text::format_health(health.current, health.max)),
                 TextFont {
                     font: font.clone(),
-                    font_size: 16.0,
+                    font_size: 16.0 * UI_FONT_SCALE,
                     ..default()
                 },
-                TextColor(Color::srgb(1.0, 0.4, 0.4)),
+                TextColor(ui_colors::TEXT_RED_BRIGHT),
                 StatsHealthText,
             ));
 
             parent.spawn((
-                Text::new(format!("Уровень: {}", experience.level)),
+                Text::new(ui_text::format_level(experience.level)),
                 TextFont {
                     font: font.clone(),
-                    font_size: 16.0,
+                    font_size: 16.0 * UI_FONT_SCALE,
                     ..default()
                 },
-                TextColor(Color::srgb(0.3, 0.8, 1.0)),
+                TextColor(ui_colors::TEXT_CYAN),
                 StatsLevelText,
             ));
 
             parent.spawn((
-                Text::new(format!(
-                    "Опыт: {}/{}",
-                    experience.current, experience.to_next_level
+                Text::new(ui_text::format_experience(
+                    experience.current,
+                    experience.to_next_level,
                 )),
                 TextFont {
                     font: font.clone(),
-                    font_size: 16.0,
+                    font_size: 16.0 * UI_FONT_SCALE,
                     ..default()
                 },
-                TextColor(Color::srgb(0.3, 0.8, 1.0)),
+                TextColor(ui_colors::TEXT_CYAN),
                 StatsExperienceText,
             ));
 
             parent.spawn((
-                Text::new(format!("Золото: {}", gold.amount)),
+                Text::new(ui_text::format_gold(gold.amount)),
                 TextFont {
                     font: font.clone(),
-                    font_size: 16.0,
+                    font_size: 16.0 * UI_FONT_SCALE,
                     ..default()
                 },
-                TextColor(Color::srgb(1.0, 0.84, 0.0)),
+                TextColor(ui_colors::TEXT_GOLD),
                 StatsGoldText,
             ));
 
             parent.spawn((
-                Text::new(format!("Скорость: {:.0}", speed.0)),
+                Text::new(ui_text::format_speed(speed.0)),
                 TextFont {
                     font: font.clone(),
-                    font_size: 16.0,
+                    font_size: 16.0 * UI_FONT_SCALE,
                     ..default()
                 },
-                TextColor(Color::srgb(0.5, 1.0, 0.5)),
+                TextColor(ui_colors::TEXT_GREEN),
                 StatsSpeedText,
             ));
 
             parent.spawn((
-                Text::new(format!("FPS: {:.0}", perf_stats.fps)),
+                Text::new(ui_text::format_fps(perf_stats.fps)),
                 TextFont {
                     font: font.clone(),
-                    font_size: 16.0,
+                    font_size: 16.0 * UI_FONT_SCALE,
                     ..default()
                 },
-                TextColor(Color::srgb(0.8, 0.9, 1.0)),
+                TextColor(ui_colors::TEXT_CYAN_LIGHT),
                 StatsFpsText,
             ));
 
             parent.spawn((
-                Text::new(format!("Память: {:.1} МБ", perf_stats.memory_mb)),
+                Text::new(ui_text::format_memory(perf_stats.memory_mb)),
                 TextFont {
                     font: font.clone(),
-                    font_size: 16.0,
+                    font_size: 16.0 * UI_FONT_SCALE,
                     ..default()
                 },
-                TextColor(Color::srgb(0.8, 0.9, 1.0)),
+                TextColor(ui_colors::TEXT_CYAN_LIGHT),
                 StatsMemoryText,
             ));
 
@@ -606,18 +608,18 @@ pub fn stats_panel_system(
                     margin: UiRect::vertical(Val::Px(10.0)),
                     ..default()
                 },
-                BackgroundColor(Color::srgb(0.5, 0.5, 0.5)),
+                BackgroundColor(ui_colors::SEPARATOR),
             ));
 
             // Статы улучшений
             parent.spawn((
-                Text::new("УЛУЧШЕНИЯ"),
+                Text::new(ui_text::UPGRADES_TITLE),
                 TextFont {
                     font: font.clone(),
-                    font_size: 18.0,
+                    font_size: 18.0 * UI_FONT_SCALE,
                     ..default()
                 },
-                TextColor(Color::srgb(1.0, 0.8, 0.3)),
+                TextColor(ui_colors::TEXT_ORANGE),
                 Node {
                     margin: UiRect::bottom(Val::Px(5.0)),
                     ..default()
@@ -628,22 +630,22 @@ pub fn stats_panel_system(
                 Text::new(build_upgrades_text(pet_count, &upgrade_state)),
                 TextFont {
                     font: font.clone(),
-                    font_size: 16.0,
+                    font_size: 16.0 * UI_FONT_SCALE,
                     ..default()
                 },
-                TextColor(Color::srgb(0.8, 0.8, 0.8)),
+                TextColor(ui_colors::TEXT_GRAY_LIGHT),
                 StatsUpgradesText,
             ));
 
             // Подсказка
             parent.spawn((
-                Text::new("\nНажми T чтобы скрыть"),
+                Text::new(ui_text::STATS_HIDE_HINT),
                 TextFont {
                     font: font.clone(),
-                    font_size: 14.0,
+                    font_size: 14.0 * UI_FONT_SCALE,
                     ..default()
                 },
-                TextColor(Color::srgb(0.6, 0.6, 0.6)),
+                TextColor(ui_colors::TEXT_GRAY_DARK),
                 Node {
                     margin: UiRect::top(Val::Px(10.0)),
                     ..default()
@@ -686,21 +688,21 @@ pub fn update_stats_panel_system(
         stats_text_query.iter_mut()
     {
         if is_health.is_some() {
-            text.0 = format!("ОЗ: {:.0}/{:.0}", health.current, health.max);
+            text.0 = ui_text::format_hud_health(health.current, health.max);
         } else if is_level.is_some() {
-            text.0 = format!("Уровень: {}", experience.level);
+            text.0 = ui_text::format_level(experience.level);
         } else if is_xp.is_some() {
-            text.0 = format!("Опыт: {}/{}", experience.current, experience.to_next_level);
+            text.0 = ui_text::format_experience(experience.current, experience.to_next_level);
         } else if is_gold.is_some() {
-            text.0 = format!("Золото: {}", gold.amount);
+            text.0 = ui_text::format_hud_gold(gold.amount);
         } else if is_speed.is_some() {
-            text.0 = format!("Скорость: {:.0}", speed.0);
+            text.0 = ui_text::format_speed(speed.0);
         } else if is_upgrades.is_some() {
             text.0 = upgrades_text.clone();
         } else if is_fps.is_some() {
-            text.0 = format!("FPS: {:.0}", perf_stats.fps);
+            text.0 = ui_text::format_fps(perf_stats.fps);
         } else if is_memory.is_some() {
-            text.0 = format!("Память: {:.1} МБ", perf_stats.memory_mb);
+            text.0 = ui_text::format_memory(perf_stats.memory_mb);
         }
     }
 }
@@ -790,7 +792,7 @@ pub fn spawn_hitbox_visuals_system(
     mut commands: Commands,
     hitbox_visible: Res<HitboxVisualsVisible>,
     visuals: Res<HitboxVisualAssets>,
-    hitbox_query: Query<(Entity, &Transform, &Hitbox), Without<HitboxVisual>>,
+    hitbox_query: Query<(Entity, &GlobalTransform, &Hitbox), Without<HitboxVisual>>,
     visual_query: Query<&HitboxVisual>,
 ) {
     if !hitbox_visible.0 {
@@ -813,7 +815,7 @@ pub fn spawn_hitbox_visuals_system(
             HitboxVisual { owner: entity },
             Mesh2d(visuals.mesh.clone()),
             MeshMaterial2d(visuals.material.clone()),
-            Transform::from_xyz(transform.translation.x, transform.translation.y, 0.15)
+            Transform::from_xyz(transform.translation().x, transform.translation().y, 0.15)
                 .with_scale(Vec3::new(size.x, size.y, 1.0)),
             GlobalTransform::default(),
             Visibility::Visible,
@@ -827,7 +829,7 @@ pub fn update_hitbox_visuals_system(
     mut commands: Commands,
     hitbox_visible: Res<HitboxVisualsVisible>,
     visuals: Res<HitboxVisualAssets>,
-    hitbox_query: Query<(&Transform, &Hitbox), Without<HitboxVisual>>,
+    hitbox_query: Query<(&GlobalTransform, &Hitbox), Without<HitboxVisual>>,
     mut visual_query: Query<(
         Entity,
         &HitboxVisual,
@@ -847,8 +849,8 @@ pub fn update_hitbox_visuals_system(
         };
 
         let size = hitbox.half_size * 2.0;
-        transform.translation.x = owner_transform.translation.x;
-        transform.translation.y = owner_transform.translation.y;
+        transform.translation.x = owner_transform.translation().x;
+        transform.translation.y = owner_transform.translation().y;
         transform.translation.z = 0.15;
         transform.scale = Vec3::new(size.x, size.y, 1.0);
 
@@ -861,42 +863,34 @@ pub fn update_hitbox_visuals_system(
 fn build_upgrades_text(pet_count: usize, upgrade_state: &UpgradeState) -> String {
     let mut lines = Vec::new();
 
-    lines.push(format!("Питомцев: {}", pet_count));
-    lines.push(format!(
-        "Урон питомцев: x{:.2}",
-        upgrade_state.pet_damage_mult
+    lines.push(ui_text::format_pet_count(pet_count));
+    lines.push(ui_text::format_pet_damage_mult(
+        upgrade_state.pet_damage_mult,
     ));
-    lines.push(format!(
-        "Скорость атаки: x{:.2}",
-        upgrade_state.pet_attack_speed_mult
+    lines.push(ui_text::format_attack_speed_mult(
+        upgrade_state.pet_attack_speed_mult,
     ));
-    lines.push(format!("Дальность: +{:.0}", upgrade_state.pet_range_bonus));
+    lines.push(ui_text::format_range_bonus(upgrade_state.pet_range_bonus));
 
     if upgrade_state.projectile_extra_shots > 0 {
-        lines.push(format!(
-            "Доп. снаряды: +{}",
-            upgrade_state.projectile_extra_shots
+        lines.push(ui_text::format_extra_projectiles(
+            upgrade_state.projectile_extra_shots,
         ));
     }
 
     if upgrade_state.projectile_pierce_bonus > 0 {
-        lines.push(format!(
-            "Пробивание: +{}",
-            upgrade_state.projectile_pierce_bonus
+        lines.push(ui_text::format_pierce_bonus(
+            upgrade_state.projectile_pierce_bonus,
         ));
     }
 
     if upgrade_state.area_damage_radius > 0.0 {
-        lines.push(format!(
-            "Радиус урона: {:.0}",
-            upgrade_state.area_damage_radius
+        lines.push(ui_text::format_area_damage(
+            upgrade_state.area_damage_radius,
         ));
     }
 
-    lines.push(format!(
-        "Множ. золота: x{:.2}",
-        upgrade_state.gold_drop_mult
-    ));
+    lines.push(ui_text::format_gold_mult(upgrade_state.gold_drop_mult));
 
     lines.join("\n")
 }

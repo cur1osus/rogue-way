@@ -8,6 +8,7 @@ pub mod movement;
 pub mod pet_behavior;
 pub mod player;
 pub mod spawning;
+pub mod terrain;
 
 pub use animation::*;
 pub use collision::*;
@@ -19,3 +20,4 @@ pub use movement::*;
 pub use pet_behavior::*;
 pub use player::*;
 pub use spawning::*;
+pub use terrain::*;

@@ -8,7 +8,7 @@ pub struct UiFonts {
 impl FromWorld for UiFonts {
     fn from_world(world: &mut World) -> Self {
         let asset_server = world.resource::<AssetServer>();
-        let main = asset_server.load("fonts/DejaVuSans.ttf");
+        let main = asset_server.load("fonts/VMVSegaGenesis-Regular.otf");
         Self { main }
     }
 }

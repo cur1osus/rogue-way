@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use crate::components::{
     AttackRange, AttackSpeed, AttackTimer, Damage, Health, MovementSpeed, Pet, PetType, Player,
 };
+use crate::constants::{ui_colors, ui_text, UI_FONT_SCALE};
 use crate::resources::{MetaProgression, PetSpriteSheet, UiFonts, UpgradeState};
 use crate::systems::player::spawn_pet;
 use rand::seq::SliceRandom;
@@ -175,19 +176,19 @@ pub fn show_level_up_ui(
                 flex_direction: FlexDirection::Column,
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.8)),
+            BackgroundColor(ui_colors::OVERLAY_DARK),
             LevelUpUI,
         ))
         .with_children(|parent| {
             // Заголовок
             parent.spawn((
-                Text::new("УРОВЕНЬ ПОВЫШЕН!"),
+                Text::new(ui_text::LEVEL_UP_TITLE),
                 TextFont {
                     font: font.clone(),
-                    font_size: 32.0,
+                    font_size: 32.0 * UI_FONT_SCALE,
                     ..default()
                 },
-                TextColor(Color::srgb(1.0, 1.0, 0.0)),
+                TextColor(ui_colors::TEXT_YELLOW),
             ));
 
             // Контейнер для кнопок
@@ -231,7 +232,7 @@ fn create_upgrade_button(
                 padding: UiRect::all(Val::Px(10.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.2, 0.2, 0.3)),
+            BackgroundColor(ui_colors::BUTTON_DARK),
             UpgradeButton {
                 upgrade: upgrade.clone(),
             },
@@ -242,10 +243,10 @@ fn create_upgrade_button(
                 Text::new(name),
                 TextFont {
                     font: font.clone(),
-                    font_size: 20.0,
+                    font_size: 20.0 * UI_FONT_SCALE,
                     ..default()
                 },
-                TextColor(Color::srgb(1.0, 0.9, 0.5)),
+                TextColor(ui_colors::TEXT_YELLOW_WARM),
             ));
 
             // Описание
@@ -253,10 +254,10 @@ fn create_upgrade_button(
                 Text::new(description),
                 TextFont {
                     font: font.clone(),
-                    font_size: 14.0,
+                    font_size: 14.0 * UI_FONT_SCALE,
                     ..default()
                 },
-                TextColor(Color::srgb(0.8, 0.8, 0.8)),
+                TextColor(ui_colors::TEXT_GRAY_LIGHT),
             ));
         });
 }

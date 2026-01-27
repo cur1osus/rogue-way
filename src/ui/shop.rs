@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::components::PetType;
+use crate::constants::{ui_colors, ui_text, UI_FONT_SCALE};
 use crate::resources::{MetaProgression, UiFonts};
 use crate::ui::{GameState, ScrollContainer, ScrollContent};
 use bevy::ui::OverflowAxis;
@@ -197,30 +198,30 @@ pub fn setup_shop_ui(
                 padding: UiRect::all(Val::Px(20.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.1, 0.1, 0.15)),
+            BackgroundColor(ui_colors::PANEL_DARK),
             ShopUI,
         ))
         .with_children(|parent| {
             // Заголовок
             parent.spawn((
-                Text::new("МАГАЗИН ТОРГОВЦА"),
+                Text::new(ui_text::SHOP_TITLE),
                 TextFont {
                     font: font.clone(),
-                    font_size: 48.0,
+                    font_size: 48.0 * UI_FONT_SCALE,
                     ..default()
                 },
-                TextColor(Color::srgb(1.0, 0.84, 0.0)),
+                TextColor(ui_colors::TEXT_GOLD),
             ));
 
             // Баланс золота
             parent.spawn((
-                Text::new(format!("Золото: {}", meta.save_data.total_gold)),
+                Text::new(ui_text::format_gold(meta.save_data.total_gold)),
                 TextFont {
                     font: font.clone(),
-                    font_size: 32.0,
+                    font_size: 32.0 * UI_FONT_SCALE,
                     ..default()
                 },
-                TextColor(Color::srgb(1.0, 1.0, 0.0)),
+                TextColor(ui_colors::TEXT_YELLOW),
                 GoldBalanceText,
             ));
 
@@ -288,18 +289,18 @@ pub fn setup_shop_ui(
                                 align_items: AlignItems::Center,
                                 ..default()
                             },
-                            BackgroundColor(Color::srgb(0.4, 0.4, 0.4)),
+                            BackgroundColor(ui_colors::BUTTON_GRAY),
                             BackToMenuButton,
                         ))
                         .with_children(|button_parent| {
                             button_parent.spawn((
-                                Text::new("← НАЗАД"),
+                                Text::new(ui_text::BTN_BACK),
                                 TextFont {
                                     font: font.clone(),
-                                    font_size: 24.0,
+                                    font_size: 24.0 * UI_FONT_SCALE,
                                     ..default()
                                 },
-                                TextColor(Color::srgb(1.0, 1.0, 1.0)),
+                                TextColor(ui_colors::TEXT_WHITE),
                             ));
                         });
 
@@ -314,18 +315,18 @@ pub fn setup_shop_ui(
                                 align_items: AlignItems::Center,
                                 ..default()
                             },
-                            BackgroundColor(Color::srgb(0.2, 0.6, 0.2)),
+                            BackgroundColor(ui_colors::BUTTON_GREEN),
                             StartRunButton,
                         ))
                         .with_children(|button_parent| {
                             button_parent.spawn((
-                                Text::new("НАЧАТЬ ЗАБЕГ"),
+                                Text::new(ui_text::BTN_START_RUN),
                                 TextFont {
                                     font: font.clone(),
-                                    font_size: 28.0,
+                                    font_size: 28.0 * UI_FONT_SCALE,
                                     ..default()
                                 },
-                                TextColor(Color::srgb(1.0, 1.0, 1.0)),
+                                TextColor(ui_colors::TEXT_WHITE),
                             ));
                         });
                 });
@@ -344,11 +345,11 @@ fn create_shop_item_card(
     let is_purchasable = is_available && can_afford;
 
     let card_color = if !is_available {
-        Color::srgb(0.3, 0.3, 0.3) // Серый - уже куплено
+        ui_colors::STATE_PURCHASED // Серый - уже куплено
     } else if can_afford {
-        Color::srgb(0.2, 0.3, 0.4) // Синеватый - можно купить
+        ui_colors::STATE_AVAILABLE // Синеватый - можно купить
     } else {
-        Color::srgb(0.4, 0.2, 0.2) // Красноватый - не хватает золота
+        ui_colors::STATE_LOCKED // Красноватый - не хватает золота
     };
 
     let mut entity_commands = parent.spawn((
@@ -376,10 +377,10 @@ fn create_shop_item_card(
             Text::new(item.get_name()),
             TextFont {
                 font: font.clone(),
-                font_size: 20.0,
+                font_size: 20.0 * UI_FONT_SCALE,
                 ..default()
             },
-            TextColor(Color::srgb(1.0, 1.0, 1.0)),
+            TextColor(ui_colors::TEXT_WHITE),
         ));
 
         // Описание
@@ -387,10 +388,10 @@ fn create_shop_item_card(
             Text::new(item.get_description()),
             TextFont {
                 font: font.clone(),
-                font_size: 14.0,
+                font_size: 14.0 * UI_FONT_SCALE,
                 ..default()
             },
-            TextColor(Color::srgb(0.8, 0.8, 0.8)),
+            TextColor(ui_colors::TEXT_GRAY_LIGHT),
             Node {
                 max_width: Val::Px(250.0),
                 ..default()
@@ -399,24 +400,24 @@ fn create_shop_item_card(
 
         // Стоимость
         let cost_text = if !is_available {
-            "КУПЛЕНО".to_string()
+            ui_text::SHOP_PURCHASED.to_string()
         } else {
-            format!("{} золота", item.get_cost())
+            ui_text::format_item_cost(item.get_cost())
         };
 
         let cost_color = if !is_available {
-            Color::srgb(0.5, 0.5, 0.5)
+            ui_colors::STATE_INACTIVE
         } else if can_afford {
-            Color::srgb(1.0, 1.0, 0.0)
+            ui_colors::TEXT_YELLOW
         } else {
-            Color::srgb(1.0, 0.3, 0.3)
+            ui_colors::TEXT_RED
         };
 
         card_parent.spawn((
             Text::new(cost_text),
             TextFont {
                 font: font.clone(),
-                font_size: 18.0,
+                font_size: 18.0 * UI_FONT_SCALE,
                 ..default()
             },
             TextColor(cost_color),

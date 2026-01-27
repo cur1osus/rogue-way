@@ -46,6 +46,9 @@ fn main() {
         .init_resource::<AttackRangeVisualAssets>()
         .init_resource::<HitboxVisualAssets>()
         .init_resource::<HitboxVisualsVisible>()
+        .init_resource::<TerrainSprites>()
+        .init_resource::<TerrainConfig>()
+        .init_resource::<TerrainChunks>()
         // Системы запуска (Startup)
         .add_systems(Startup, setup_camera)
         // Системы главного меню
@@ -79,7 +82,7 @@ fn main() {
         // Системы при входе в игру
         .add_systems(
             OnEnter(GameState::Playing),
-            (setup_player, setup_pets, setup_hud),
+            (setup_player, setup_pets, setup_hud, reset_terrain_chunks),
         )
         // Системы очистки при переходе в меню/магазин (НЕ при LevelUpChoice!)
         .add_systems(OnEnter(GameState::Shop), cleanup_game_entities)
@@ -111,6 +114,10 @@ fn main() {
                 slow_effect_system,
             )
                 .run_if(in_state(GameState::Playing)),
+        )
+        .add_systems(
+            Update,
+            terrain_chunk_system.run_if(in_state(GameState::Playing)),
         )
         .add_systems(
             Update,

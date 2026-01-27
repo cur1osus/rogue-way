@@ -25,21 +25,29 @@ impl CollisionLayer {
     pub const PLAYER: u32 = 1 << 0;
     pub const PET: u32 = 1 << 1;
     pub const ENEMY: u32 = 1 << 2;
+    pub const OBSTACLE: u32 = 1 << 3;
 
     pub fn new(group: u32, mask: u32) -> Self {
         Self { group, mask }
     }
 
     pub fn player() -> Self {
-        Self::new(Self::PLAYER, Self::ENEMY)
+        Self::new(Self::PLAYER, Self::ENEMY | Self::OBSTACLE)
     }
 
     pub fn pet() -> Self {
-        Self::new(Self::PET, Self::ENEMY)
+        Self::new(Self::PET, Self::ENEMY | Self::OBSTACLE)
     }
 
     pub fn enemy() -> Self {
-        Self::new(Self::ENEMY, Self::PLAYER | Self::PET | Self::ENEMY)
+        Self::new(
+            Self::ENEMY,
+            Self::PLAYER | Self::PET | Self::ENEMY | Self::OBSTACLE,
+        )
+    }
+
+    pub fn obstacle() -> Self {
+        Self::new(Self::OBSTACLE, Self::ENEMY)
     }
 
     pub fn collides_with(self, other: Self) -> bool {

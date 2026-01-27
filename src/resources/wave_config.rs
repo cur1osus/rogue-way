@@ -23,13 +23,13 @@ impl Default for WaveConfig {
     fn default() -> Self {
         Self {
             spawn_timer: Timer::from_seconds(3.0, TimerMode::Repeating),
-            base_spawn_interval: 3.0,
+            base_spawn_interval: 5.0,
             enemies_per_spawn: 1,
             difficulty_multiplier: 1.0,
             game_time: 0.0,
-            boss_5min_spawned: false,
-            boss_10min_spawned: false,
-            boss_15min_spawned: false,
+            boss_5min_spawned: true,
+            boss_10min_spawned: true,
+            boss_15min_spawned: true,
         }
     }
 }

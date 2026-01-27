@@ -23,17 +23,14 @@ impl FromWorld for GoldSprites {
             let mut texture_atlas_layouts = world.resource_mut::<Assets<TextureAtlasLayout>>();
 
             // Обычная монета (один кадр 128x128)
-            let normal_texture = asset_server
-                .load("sprites/Gold/Gold_Resource.png".to_string());
+            let normal_texture = asset_server.load("sprites/Gold/Gold_Resource.png".to_string());
             let normal_layout =
                 TextureAtlasLayout::from_grid(UVec2::new(128, 128), 1, 1, None, None);
             let normal_layout_handle = texture_atlas_layouts.add(normal_layout);
 
             // Сверкающая монета (6 кадров анимации 128x128 каждый)
-            let highlight_texture = asset_server.load(
-                "sprites/Gold/Gold_Resource_Highlight.png"
-                    .to_string(),
-            );
+            let highlight_texture =
+                asset_server.load("sprites/Gold/Gold_Resource_Highlight.png".to_string());
             let highlight_layout =
                 TextureAtlasLayout::from_grid(UVec2::new(128, 128), 6, 1, None, None);
             let highlight_layout_handle = texture_atlas_layouts.add(highlight_layout);

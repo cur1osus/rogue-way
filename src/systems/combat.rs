@@ -3,7 +3,7 @@ use crate::components::{
     GoldHighlightTimer, GoldPickup, Health, HitFlash, PendingAttack, Pet, PetType, Player,
     SlowEffect, Team, XpGem,
 };
-use crate::constants::{GOLD_SCALE, XP_GEM_SCALE};
+use crate::constants::{GOLD_SCALE, UI_FONT_SCALE, XP_GEM_SCALE};
 use crate::resources::{
     GoldSprites, MetaProgression, PetSpriteSheet, ScreenShake, UiFonts, UpgradeState, XpGemSprites,
 };
@@ -314,7 +314,7 @@ pub fn damage_system(
                 Text2d::new(format!("{:.0}", event.damage)),
                 TextFont {
                     font: ui_fonts.main.clone(),
-                    font_size: 16.0,
+                    font_size: 16.0 * UI_FONT_SCALE,
                     ..default()
                 },
                 TextColor(damage_color),
