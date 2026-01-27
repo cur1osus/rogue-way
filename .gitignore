@@ -1,0 +1,33 @@
+# Rust
+/target/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/
+
+# Game save data
+saves/
+
+# Bevy hot reloading
+.bevy_hot_reload/
+
+# Debug files
+*.pdb
+
+
+CLAUDE.md
+QUICK_NOTES.md
+SPRITE_SYSTEM_ARCHITECTURE.md
+local_assets/
+specs.md
+implementation_plan.md
