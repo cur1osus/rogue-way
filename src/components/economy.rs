@@ -97,6 +97,7 @@ pub struct GoldHighlightTimer {
 }
 
 /// Компонент анимации сверкания золота
+#[allow(dead_code)]
 #[derive(Component)]
 pub struct GoldAnimation {
     pub timer: Timer,

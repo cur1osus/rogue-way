@@ -69,6 +69,7 @@ impl ShopItem {
                 PetType::FireSprite => "Огненный дух с пробивающими снарядами".to_string(),
                 PetType::SlimeCompanion => "Слизь, замедляющая врагов".to_string(),
                 PetType::CrowScout => "Быстрая ворона-разведчик".to_string(),
+                PetType::XpCollector => "Собирает опыт, пока вы сражаетесь".to_string(),
             },
             ShopItem::MaxHpUpgrade(_) => "Постоянно +10 к макс. здоровью".to_string(),
             ShopItem::MovementSpeedUpgrade(_) => "Постоянно +5% к скорости движения".to_string(),
@@ -158,6 +159,7 @@ impl ShopItem {
             ShopItem::UnlockPet(PetType::GuardDog, 500),
             ShopItem::UnlockPet(PetType::FireSprite, 800),
             ShopItem::UnlockPet(PetType::SlimeCompanion, 1200),
+            ShopItem::UnlockPet(PetType::XpCollector, 1500),
             ShopItem::UnlockPet(PetType::CrowScout, 2000),
             // Базовые статы (§3.2.2)
             ShopItem::MaxHpUpgrade(100),

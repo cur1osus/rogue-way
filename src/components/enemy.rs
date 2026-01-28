@@ -28,6 +28,7 @@ impl EnemyType {
     }
 
     /// Получить цвет спрайта врага (временно вместо текстур)
+    #[allow(dead_code)]
     pub fn get_color(&self) -> Color {
         match self {
             EnemyType::Bandit => Color::srgb(0.8, 0.2, 0.2), // Красный
@@ -75,7 +76,7 @@ impl EnemyType {
 
 /// Цель для AI (указывает на Entity игрока)
 #[derive(Component)]
-pub struct Target(pub Entity);
+pub struct Target(#[allow(dead_code)] pub Entity);
 
 /// Маркер босса
 #[derive(Component)]
@@ -96,13 +97,14 @@ impl BossType {
     pub fn get_stats(&self) -> (f32, f32, f32, u32) {
         // (HP, скорость, урон, XP награда)
         match self {
-            BossType::BanditLeader => (200.0, 60.0, 15.0, 100),
-            BossType::ThiefKing => (150.0, 120.0, 20.0, 200),
-            BossType::BruteChieftain => (400.0, 40.0, 30.0, 300),
+            BossType::BanditLeader => (2000.0, 60.0, 15.0, 100),
+            BossType::ThiefKing => (1500.0, 120.0, 20.0, 200),
+            BossType::BruteChieftain => (4000.0, 40.0, 30.0, 300),
         }
     }
 
     /// Получить цвет спрайта босса
+    #[allow(dead_code)]
     pub fn get_color(&self) -> Color {
         match self {
             BossType::BanditLeader => Color::srgb(0.9, 0.1, 0.1), // Ярко-красный
@@ -153,6 +155,22 @@ impl BossType {
             BossType::BanditLeader => boss_attack_ranges::BANDIT_LEADER,
             BossType::ThiefKing => boss_attack_ranges::THIEF_KING,
             BossType::BruteChieftain => boss_attack_ranges::BRUTE_CHIEFTAIN,
+        }
+    }
+}
+
+/// Компонент анимации смерти врага
+#[derive(Component)]
+pub struct DeathAnimation {
+    pub timer: Timer,
+    pub animation_started: bool,
+}
+
+impl DeathAnimation {
+    pub fn new(duration: f32) -> Self {
+        Self {
+            timer: Timer::from_seconds(duration, TimerMode::Once),
+            animation_started: false,
         }
     }
 }

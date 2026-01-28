@@ -3,6 +3,8 @@ use rand::Rng;
 
 use crate::components::{FloatingText, HitFlash, Particle, TimedDespawn};
 use crate::resources::ScreenShake;
+use crate::ui::{AreaDamageVisual, AreaDamageVisualAssets};
+use bevy::math::primitives::CircularSector;
 
 pub fn spawn_hit_particles(commands: &mut Commands, position: Vec2, color: Color, count: u32) {
     let mut rng = rand::thread_rng();
@@ -24,6 +26,43 @@ pub fn spawn_hit_particles(commands: &mut Commands, position: Vec2, color: Color
             Transform::from_xyz(position.x, position.y, 0.6),
         ));
     }
+}
+
+pub fn spawn_area_damage_visual(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    visuals: &AreaDamageVisualAssets,
+    position: Vec2,
+    radius: f32,
+    direction: Vec2,
+    cone_angle: f32,
+) {
+    if radius <= 0.0 {
+        return;
+    }
+
+    let mesh = meshes.add(Mesh::from(CircularSector::from_radians(1.0, cone_angle)));
+    let rotation = if direction.length_squared() > f32::EPSILON {
+        Quat::from_rotation_z(direction.y.atan2(direction.x) - std::f32::consts::FRAC_PI_2)
+    } else {
+        Quat::IDENTITY
+    };
+
+    commands.spawn((
+        AreaDamageVisual,
+        TimedDespawn {
+            timer: Timer::from_seconds(0.3, TimerMode::Once),
+        },
+        Mesh2d(mesh),
+        MeshMaterial2d(visuals.material.clone()),
+        Transform::from_xyz(position.x, position.y, 0.22)
+            .with_rotation(rotation)
+            .with_scale(Vec3::splat(radius)),
+        GlobalTransform::default(),
+        Visibility::Visible,
+        InheritedVisibility::default(),
+        ViewVisibility::default(),
+    ));
 }
 
 pub fn particle_system(

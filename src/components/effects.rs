@@ -40,3 +40,11 @@ pub struct EffectSprite;
 pub struct TimedDespawn {
     pub timer: Timer,
 }
+
+/// Эффект отталкивания: применяет импульс к сущности (враги и т.п.)
+#[derive(Component)]
+pub struct KnockbackEffect {
+    pub remaining: Vec2,
+    /// Затухание в единицах/сек (линейное уменьшение длины remaining)
+    pub decay_per_second: f32,
+}

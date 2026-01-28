@@ -8,7 +8,8 @@ use bevy::prelude::{
 };
 
 use crate::components::{
-    CollisionLayer, Hitbox, Player, TerrainChunk, TerrainDecoration, TerrainTile,
+    CollisionLayer, Hitbox, PhysicsPosition, Player, PreviousPhysicsPosition, TerrainChunk,
+    TerrainDecoration, TerrainTile, Velocity,
 };
 use crate::constants::ROCK_HITBOX_SCALE;
 use crate::resources::{TerrainChunks, TerrainConfig, TerrainSprites, TerrainTileset};
@@ -16,6 +17,7 @@ use crate::resources::{TerrainChunks, TerrainConfig, TerrainSprites, TerrainTile
 const Z_GROUND: f32 = 0.0;
 const Z_WATER: f32 = 0.01;
 const Z_FOAM: f32 = 0.02;
+#[allow(dead_code)]
 const Z_SHADOW: f32 = 0.03;
 const Z_DECOR: f32 = 0.04;
 
@@ -127,6 +129,7 @@ fn spawn_chunk(
                         config,
                         tile_x,
                         tile_y,
+                        chunk_origin,
                     );
                 } else {
                     spawn_ground_tile(parent, position, terrain_sprites, config, tile_x, tile_y);
@@ -137,6 +140,7 @@ fn spawn_chunk(
                         config,
                         tile_x,
                         tile_y,
+                        chunk_origin,
                     );
                 }
             }
@@ -237,6 +241,7 @@ fn spawn_land_decorations(
     config: &TerrainConfig,
     tile_x: i32,
     tile_y: i32,
+    chunk_origin: Vec3,
 ) {
     let roll = hash_f32(tile_x, tile_y, config.seed.wrapping_add(4242));
 
@@ -257,6 +262,8 @@ fn spawn_land_decorations(
             config.seed.wrapping_add(103),
         );
         let hitbox_size = Vec2::splat(config.tile_size * ROCK_HITBOX_SCALE);
+        // Вычисляем мировые координаты (chunk_origin + local position)
+        let world_position = Vec2::new(chunk_origin.x + position.x, chunk_origin.y + position.y);
         parent.spawn((
             Sprite {
                 image: terrain_sprites.rocks[rock_index].clone(),
@@ -266,6 +273,9 @@ fn spawn_land_decorations(
             TerrainDecoration,
             Hitbox::from_full_size(hitbox_size),
             CollisionLayer::obstacle(),
+            PhysicsPosition(world_position),
+            PreviousPhysicsPosition(world_position),
+            Velocity::default(),
         ));
     }
 }
@@ -277,6 +287,7 @@ fn spawn_water_decorations(
     config: &TerrainConfig,
     tile_x: i32,
     tile_y: i32,
+    chunk_origin: Vec3,
 ) {
     let roll = hash_f32(tile_x, tile_y, config.seed.wrapping_add(9001));
 
@@ -288,7 +299,15 @@ fn spawn_water_decorations(
             config.seed.wrapping_add(200),
         );
         let tile_index = pick_tile_index(tileset, tile_x, tile_y, config.seed.wrapping_add(201));
-        spawn_tileset_obstacle(parent, position, tileset, config, tile_index, 1.0);
+        spawn_tileset_obstacle(
+            parent,
+            position,
+            tileset,
+            config,
+            tile_index,
+            1.0,
+            chunk_origin,
+        );
     } else if roll < config.water_rock_chance + config.duck_chance {
         let tileset = &terrain_sprites.rubber_duck;
         let tile_index = pick_tile_index(tileset, tile_x, tile_y, config.seed.wrapping_add(202));
@@ -308,14 +327,15 @@ fn spawn_water_decorations(
     }
 }
 
+#[allow(dead_code)]
 fn spawn_shadow(
     parent: &mut ChildSpawnerCommands,
     position: Vec3,
     terrain_sprites: &TerrainSprites,
     config: &TerrainConfig,
     scale_multiplier: f32,
-    tile_x: i32,
-    tile_y: i32,
+    _tile_x: i32,
+    _tile_y: i32,
 ) {
     let tileset = &terrain_sprites.shadow;
     let tile_index = 4;
@@ -368,9 +388,12 @@ fn spawn_tileset_obstacle(
     config: &TerrainConfig,
     tile_index: usize,
     scale_multiplier: f32,
+    chunk_origin: Vec3,
 ) {
     let scale = (config.tile_size / tileset.tile_size.x) * scale_multiplier;
     let hitbox_size = Vec2::splat(config.tile_size * ROCK_HITBOX_SCALE * scale_multiplier);
+    // Вычисляем мировые координаты (chunk_origin + local position)
+    let world_position = Vec2::new(chunk_origin.x + position.x, chunk_origin.y + position.y);
     parent.spawn((
         Sprite {
             image: tileset.texture.clone(),
@@ -384,6 +407,9 @@ fn spawn_tileset_obstacle(
         TerrainDecoration,
         Hitbox::from_full_size(hitbox_size),
         CollisionLayer::obstacle(),
+        PhysicsPosition(world_position),
+        PreviousPhysicsPosition(world_position),
+        Velocity::default(),
     ));
 }
 

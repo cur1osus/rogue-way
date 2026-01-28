@@ -1,6 +1,6 @@
 use crate::components::{
     EffectSprite, Enemy, FloatingText, GoldPickup, HitFlash, Particle, Pet, Player, Projectile,
-    TerrainChunk, TimedDespawn, XpGem,
+    PushbackReadyGlow, TerrainChunk, TimedDespawn, XpGem,
 };
 use crate::ui::{AttackRangeVisual, GameState, HitboxVisual, HudUI};
 use bevy::prelude::*;
@@ -43,11 +43,15 @@ pub fn cleanup_game_entities(
             With<TerrainChunk>,
         )>,
     >,
+    glow_query: Query<Entity, With<PushbackReadyGlow>>,
     mut upgrade_state: ResMut<crate::resources::UpgradeState>,
     mut wave_config: ResMut<crate::resources::WaveConfig>,
     mut terrain_chunks: ResMut<crate::resources::TerrainChunks>,
 ) {
     for entity in cleanup_query.iter() {
+        commands.entity(entity).despawn();
+    }
+    for entity in glow_query.iter() {
         commands.entity(entity).despawn();
     }
     terrain_chunks.chunks.clear();

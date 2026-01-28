@@ -3,7 +3,8 @@ use bevy::window::PrimaryWindow;
 
 use crate::components::{
     AnimationIndices, AnimationTimer, AttackRange, AttackTimer, Boss, BossType, CollisionLayer,
-    Damage, Enemy, EnemyType, Health, Hitbox, MovementSpeed, Player, Target, Team, Velocity,
+    Damage, Enemy, EnemyType, Health, Hitbox, MovementSpeed, PhysicsPosition, Player,
+    PreviousPhysicsPosition, Target, Team, Velocity,
 };
 use crate::constants::{ENEMY_HITBOX_SCALE, MAX_ACTIVE_ENEMIES};
 use crate::resources::{EnemySpriteSheet, WaveConfig};
@@ -269,6 +270,8 @@ fn spawn_enemy(
                 last: enemy_sprites.run.last,
             },
             AnimationTimer(Timer::from_seconds(0.12, TimerMode::Repeating)),
+            PhysicsPosition(spawn_pos),
+            PreviousPhysicsPosition(spawn_pos),
         ));
 }
 

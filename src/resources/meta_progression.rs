@@ -41,6 +41,7 @@ impl PermanentUpgrades {
     }
 
     /// Вычисляет шанс удачи (0.0 - 1.0)
+    #[allow(dead_code)]
     pub fn get_luck(&self) -> f32 {
         (self.luck_level as f32 * 0.05).min(1.0)
     }
@@ -51,6 +52,7 @@ impl PermanentUpgrades {
     }
 
     /// Получить общее количество слотов питомцев
+    #[allow(dead_code)]
     pub fn get_total_pet_slots(&self) -> u32 {
         1 + self.pet_slots
     }
@@ -170,6 +172,7 @@ impl SaveData {
     }
 
     /// Разблокировать достижение
+    #[allow(dead_code)]
     pub fn unlock_achievement(&mut self, achievement_id: &str) {
         if !self.achievements.contains(&achievement_id.to_string()) {
             self.achievements.push(achievement_id.to_string());
@@ -195,6 +198,7 @@ impl Default for MetaProgression {
 
 impl MetaProgression {
     /// Создать новый ресурс с загрузкой данных
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -222,6 +226,7 @@ pub fn auto_save_system(mut meta: ResMut<MetaProgression>) {
 }
 
 /// Система для сохранения при выходе
+#[allow(dead_code)]
 pub fn save_on_exit_system(meta: Res<MetaProgression>) {
     if let Err(e) = meta.save_data.save() {
         let _ = e;

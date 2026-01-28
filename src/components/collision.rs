@@ -18,6 +18,7 @@ impl Hitbox {
 #[derive(Component, Clone, Copy)]
 pub struct CollisionLayer {
     pub group: u32,
+    #[allow(dead_code)]
     pub mask: u32,
 }
 
@@ -50,6 +51,7 @@ impl CollisionLayer {
         Self::new(Self::OBSTACLE, Self::ENEMY)
     }
 
+    #[allow(dead_code)]
     pub fn collides_with(self, other: Self) -> bool {
         (self.mask & other.group) != 0 && (other.mask & self.group) != 0
     }

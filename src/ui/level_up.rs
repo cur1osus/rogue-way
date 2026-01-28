@@ -2,6 +2,7 @@ use bevy::prelude::*;
 
 use crate::components::{
     AttackRange, AttackSpeed, AttackTimer, Damage, Health, MovementSpeed, Pet, PetType, Player,
+    PushbackAttack,
 };
 use crate::constants::{ui_colors, ui_text, UI_FONT_SCALE};
 use crate::resources::{MetaProgression, PetSpriteSheet, UiFonts, UpgradeState};
@@ -43,6 +44,8 @@ pub enum UpgradeType {
     MaxHpBoost(f32),         // +X максимального HP
     HealPlayer(f32),         // Восстановить X% HP
     MovementSpeedBoost(f32), // +X% скорости движения
+    PushbackConeBoost(f32),  // +X° угла отталкивания
+    PushbackForceBoost(f32), // +X силы отталкивания
 
     // Специальные способности
     MultiShot,       // Питомцы стреляют дополнительным снарядом
@@ -66,6 +69,12 @@ impl UpgradeType {
             UpgradeType::MaxHpBoost(amount) => format!("Макс. ОЗ +{:.0}", amount),
             UpgradeType::HealPlayer(amount) => format!("Лечение {:.0}%", amount * 100.0),
             UpgradeType::MovementSpeedBoost(amount) => format!("Скорость +{:.0}%", amount * 100.0),
+            UpgradeType::PushbackConeBoost(amount) => {
+                format!("Угол отталкивания +{:.0}°", amount)
+            }
+            UpgradeType::PushbackForceBoost(amount) => {
+                format!("Сила отталкивания +{:.0}", amount)
+            }
             UpgradeType::MultiShot => "Мульти-выстрел".to_string(),
             UpgradeType::Piercing => "Пробивание".to_string(),
             UpgradeType::AreaDamage(radius) => format!("Урон по площади ({:.0})", radius),
@@ -81,6 +90,7 @@ impl UpgradeType {
                 PetType::FireSprite => "Стреляет пробивающими снарядами".to_string(),
                 PetType::SlimeCompanion => "Замедляет врагов при попадании".to_string(),
                 PetType::CrowScout => "Быстрый питомец с большой дальностью".to_string(),
+                PetType::XpCollector => "Подбирает XP гемы рядом".to_string(),
             },
             UpgradeType::PetDamageBoost(_) => "Увеличивает урон всех питомцев".to_string(),
             UpgradeType::PetAttackSpeedBoost(_) => "Питомцы атакуют быстрее".to_string(),
@@ -88,6 +98,10 @@ impl UpgradeType {
             UpgradeType::MaxHpBoost(_) => "Увеличивает максимальное здоровье".to_string(),
             UpgradeType::HealPlayer(_) => "Мгновенно восстанавливает здоровье".to_string(),
             UpgradeType::MovementSpeedBoost(_) => "Вы двигаетесь быстрее".to_string(),
+            UpgradeType::PushbackConeBoost(_) => "Расширяет угол отталкивающей атаки".to_string(),
+            UpgradeType::PushbackForceBoost(_) => {
+                "Отталкивающая атака становится сильнее".to_string()
+            }
             UpgradeType::MultiShot => "Питомцы стреляют двойным залпом".to_string(),
             UpgradeType::Piercing => "Снаряды пробивают больше врагов".to_string(),
             UpgradeType::AreaDamage(_) => "Атаки наносят урон в радиусе".to_string(),
@@ -103,6 +117,7 @@ impl UpgradeType {
             UpgradeType::SummonPet(PetType::FireSprite),
             UpgradeType::SummonPet(PetType::SlimeCompanion),
             UpgradeType::SummonPet(PetType::CrowScout),
+            UpgradeType::SummonPet(PetType::XpCollector),
             // Улучшения питомцев
             UpgradeType::PetDamageBoost(0.15),
             UpgradeType::PetDamageBoost(0.25),
@@ -117,10 +132,12 @@ impl UpgradeType {
             UpgradeType::HealPlayer(1.0),
             UpgradeType::MovementSpeedBoost(0.15),
             UpgradeType::MovementSpeedBoost(0.25),
+            UpgradeType::PushbackConeBoost(45.0),
+            UpgradeType::PushbackForceBoost(200.0),
             // Специальные
             UpgradeType::MultiShot,
             UpgradeType::Piercing,
-            UpgradeType::AreaDamage(90.0),
+            UpgradeType::AreaDamage(20.0),
             // Экономика
             UpgradeType::GoldDropBoost(0.2),
             UpgradeType::GoldDropBoost(0.35),
@@ -269,7 +286,7 @@ pub fn handle_upgrade_button(
     ui_query: Query<Entity, With<LevelUpUI>>,
     mut next_state: ResMut<NextState<GameState>>,
     mut upgrade_state: ResMut<UpgradeState>,
-    mut player_query: Query<(&mut Health, &mut MovementSpeed), With<Player>>,
+    mut player_query: Query<(&mut Health, &mut MovementSpeed, &mut PushbackAttack), With<Player>>,
     mut pet_query: Query<
         (
             &mut Damage,
@@ -309,7 +326,7 @@ fn apply_upgrade(
     commands: &mut Commands,
     upgrade: &UpgradeType,
     upgrade_state: &mut UpgradeState,
-    player_query: &mut Query<(&mut Health, &mut MovementSpeed), With<Player>>,
+    player_query: &mut Query<(&mut Health, &mut MovementSpeed, &mut PushbackAttack), With<Player>>,
     pet_query: &mut Query<
         (
             &mut Damage,
@@ -345,20 +362,31 @@ fn apply_upgrade(
             }
         }
         UpgradeType::MaxHpBoost(amount) => {
-            if let Ok((mut health, _)) = player_query.single_mut() {
+            if let Ok((mut health, _, _)) = player_query.single_mut() {
                 health.max += amount;
                 health.current += amount; // Также восстанавливаем HP
             }
         }
         UpgradeType::HealPlayer(percent) => {
-            if let Ok((mut health, _)) = player_query.single_mut() {
+            if let Ok((mut health, _, _)) = player_query.single_mut() {
                 let heal_amount = health.max * percent;
                 health.current = (health.current + heal_amount).min(health.max);
             }
         }
         UpgradeType::MovementSpeedBoost(amount) => {
-            if let Ok((_, mut speed)) = player_query.single_mut() {
+            if let Ok((_, mut speed, _)) = player_query.single_mut() {
                 speed.0 *= 1.0 + amount;
+            }
+        }
+        UpgradeType::PushbackConeBoost(amount) => {
+            if let Ok((_, _, mut pushback)) = player_query.single_mut() {
+                let new_angle = pushback.cone_angle + amount.to_radians();
+                pushback.cone_angle = new_angle.min(std::f32::consts::TAU);
+            }
+        }
+        UpgradeType::PushbackForceBoost(amount) => {
+            if let Ok((_, _, mut pushback)) = player_query.single_mut() {
+                pushback.pushback_force += amount;
             }
         }
         UpgradeType::MultiShot => {

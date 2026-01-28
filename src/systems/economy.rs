@@ -1,33 +1,49 @@
 use crate::components::{
-    AnimationIndices, AnimationTimer, Experience, Gold, GoldHighlightTimer, GoldPickup, Player,
-    XpGem,
+    AnimationIndices, AnimationTimer, Experience, Gold, GoldHighlightTimer, GoldPickup, Pet,
+    PetType, Player, XpGem,
 };
+use crate::constants::XP_PICKUP_RADIUS;
 use crate::resources::{GoldSprites, MetaProgression, UiFonts};
 use bevy::prelude::*;
 
-const XP_PICKUP_RADIUS: f32 = 50.0; // Авто-сбор в радиусе 50 пикселей
 const GOLD_PICKUP_RADIUS: f32 = 60.0; // Золото подбирается чуть дальше
 
 /// Система авто-сбора XP гемов и золота
 pub fn pickup_system(
     mut commands: Commands,
     mut player_query: Query<(&Transform, &mut Gold), With<Player>>,
+    pet_query: Query<(&Transform, &Pet)>,
     gem_query: Query<(Entity, &Transform, &XpGem)>,
     gold_query: Query<(Entity, &Transform, &GoldPickup)>,
+    mut gain_xp_events: MessageWriter<GainXpEvent>,
 ) {
     let Ok((player_transform, mut player_gold)) = player_query.single_mut() else {
         return;
     };
 
-    // Подбор XP
-    for (gem_entity, gem_transform, _gem) in gem_query.iter() {
-        let distance = player_transform
-            .translation
-            .distance(gem_transform.translation);
+    let xp_collectors: Vec<Vec2> = pet_query
+        .iter()
+        .filter_map(|(transform, pet)| {
+            if pet.pet_type == PetType::XpCollector {
+                Some(transform.translation.truncate())
+            } else {
+                None
+            }
+        })
+        .collect();
 
-        if distance <= XP_PICKUP_RADIUS {
+    // Подбор XP
+    for (gem_entity, gem_transform, gem) in gem_query.iter() {
+        let gem_pos = gem_transform.translation;
+        let distance = player_transform.translation.distance(gem_pos);
+        let picked_by_pet = distance > XP_PICKUP_RADIUS
+            && xp_collectors
+                .iter()
+                .any(|pos| pos.distance(gem_pos.truncate()) <= XP_PICKUP_RADIUS);
+
+        if distance <= XP_PICKUP_RADIUS || picked_by_pet {
             commands.entity(gem_entity).despawn();
-            // XP обрабатывается через события
+            gain_xp_events.write(GainXpEvent { amount: gem.value });
         }
     }
 
@@ -72,6 +88,7 @@ pub fn gain_xp_system(
 /// Событие повышения уровня
 #[derive(Message)]
 pub struct LevelUpEvent {
+    #[allow(dead_code)]
     pub new_level: u32,
 }
 
@@ -85,7 +102,7 @@ pub fn level_up_system(
 ) {
     let mut should_show_ui = false;
 
-    for event in level_up_events.read() {
+    for _event in level_up_events.read() {
         should_show_ui = true;
     }
 

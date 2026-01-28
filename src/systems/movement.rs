@@ -1,4 +1,6 @@
-use crate::components::{Enemy, MovementSpeed, Player, SlowEffect, Target, Velocity};
+use crate::components::{
+    DeathAnimation, Enemy, MovementSpeed, Player, SlowEffect, Target, Velocity,
+};
 use bevy::prelude::*;
 
 /// Система обработки ввода игрока (WASD/Arrow keys)
@@ -32,13 +34,15 @@ pub fn input_system(
     }
 }
 
-/// Система применения скорости к позиции
-pub fn movement_system(time: Res<Time>, mut query: Query<(&mut Transform, &Velocity)>) {
-    for (mut transform, velocity) in query.iter_mut() {
-        transform.translation.x += velocity.0.x * time.delta_secs();
-        transform.translation.y += velocity.0.y * time.delta_secs();
-    }
-}
+// УДАЛЕНО: Система применения скорости к позиции
+// Функциональность перенесена в physics_update_system (src/systems/physics.rs)
+// который использует fixed timestep и работает с PhysicsPosition вместо Transform
+// pub fn movement_system(time: Res<Time>, mut query: Query<(&mut Transform, &Velocity)>) {
+//     for (mut transform, velocity) in query.iter_mut() {
+//         transform.translation.x += velocity.0.x * time.delta_secs();
+//         transform.translation.y += velocity.0.y * time.delta_secs();
+//     }
+// }
 
 /// Система AI врагов - преследование цели (игрока)
 pub fn enemy_ai_system(
@@ -52,7 +56,7 @@ pub fn enemy_ai_system(
             &Target,
             Option<&SlowEffect>,
         ),
-        (With<Enemy>, Without<Player>),
+        (With<Enemy>, Without<Player>, Without<DeathAnimation>),
     >,
 ) {
     // Получаем позицию игрока

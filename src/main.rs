@@ -34,6 +34,8 @@ fn main() {
         .init_resource::<WaveConfig>()
         .init_resource::<UpgradeState>()
         .init_resource::<ScreenShake>()
+        .init_resource::<PlayerDamageFlash>()
+        .init_resource::<PhysicsAccumulator>()
         .init_resource::<UiFonts>()
         .init_resource::<EnemySpriteSheet>()
         .init_resource::<MetaProgression>()
@@ -42,13 +44,16 @@ fn main() {
         .init_resource::<GoldSprites>()
         .init_resource::<XpGemSprites>()
         .init_resource::<StatsPanelVisible>()
+        .init_resource::<DevPanelVisible>()
         .init_resource::<PerformanceStats>()
         .init_resource::<AttackRangeVisualAssets>()
         .init_resource::<HitboxVisualAssets>()
+        .init_resource::<AreaDamageVisualAssets>()
         .init_resource::<HitboxVisualsVisible>()
         .init_resource::<TerrainSprites>()
         .init_resource::<TerrainConfig>()
         .init_resource::<TerrainChunks>()
+        .init_resource::<PlayerAttackSprites>()
         // Системы запуска (Startup)
         .add_systems(Startup, setup_camera)
         // Системы главного меню
@@ -92,18 +97,40 @@ fn main() {
         .add_systems(
             Update,
             (
+                // Ввод (обновляет Velocity)
                 input_system,
+                pushback_last_direction_system,
+                pushback_input_system,
+                pushback_ready_glow_system.after(pushback_input_system),
+                pushback_ready_glow_setup_system.before(pushback_ready_glow_system),
+                // AI (обновляет Velocity)
                 enemy_ai_system,
                 enemy_facing_system,
-                movement_system,
-                entity_collision_system,
+                // Физика с fixed timestep (обновляет PhysicsPosition)
+                physics_update_system,
+                // Knockback (обновляет PhysicsPosition)
+                knockback_effect_system,
+                // Интерполяция (обновляет Transform для рендеринга)
+                interpolation_system,
+                // Визуальные системы
                 player_animation_system,
+                pushback_ready_glow_sync_system.after(player_animation_system),
+                pushback_animation_system,
+                pushback_overlay_system,
+                pushback_cone_visual_system,
                 pet_ai_system,
                 pet_animation_system,
                 pet_attack_timer_system,
+            )
+                .run_if(in_state(GameState::Playing)),
+        )
+        .add_systems(
+            Update,
+            (
                 spawn_system,
                 attack_timer_tick_system,
                 enemy_animation_system,
+                enemy_death_animation_system,
                 pending_attack_system,
                 collision_system,
                 pet_projectile_attack_system,
@@ -127,6 +154,7 @@ fn main() {
                 gold_highlight_system,
                 gold_animation_system,
                 hit_flash_system,
+                player_damage_flash_system,
                 floating_text_system,
                 particle_system,
                 effect_animation_system,
@@ -154,9 +182,12 @@ fn main() {
             (
                 toggle_hitbox_visuals_system,
                 toggle_stats_panel_system,
+                toggle_dev_panel_system,
                 stats_panel_system,
+                dev_panel_system,
                 performance_stats_system,
                 update_stats_panel_system,
+                dev_panel_actions_system,
             )
                 .run_if(in_state(GameState::Playing)),
         )

@@ -13,6 +13,7 @@ pub struct EnemyAnimationSheet {
 pub struct EnemySpriteSheet {
     pub run: EnemyAnimationSheet,
     pub attack: EnemyAnimationSheet,
+    pub death: EnemyAnimationSheet,
 }
 
 impl FromWorld for EnemySpriteSheet {
@@ -33,6 +34,13 @@ impl FromWorld for EnemySpriteSheet {
                     "sprites/mushroom-attack.png",
                     Vec2::new(80.0, 36.0),
                     10,
+                ),
+                death: build_enemy_sheet(
+                    &asset_server,
+                    &mut texture_atlas_layouts,
+                    "sprites/death.png",
+                    Vec2::new(192.0, 192.0),
+                    8,
                 ),
             }
         })

@@ -21,6 +21,7 @@ pub struct TerrainSprites {
     pub ground_tilesets: Vec<TerrainTileset>,
     pub water_background: Handle<Image>,
     pub water_foam: TerrainTileset,
+    #[allow(dead_code)]
     pub shadow: TerrainTileset,
     pub rocks: Vec<Handle<Image>>,
     pub water_rocks: Vec<TerrainTileset>,

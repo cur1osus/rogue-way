@@ -14,6 +14,7 @@ pub struct GoldSprites {
     pub highlight_first: usize,
     pub highlight_last: usize,
 
+    #[allow(dead_code)]
     pub frame_size: Vec2,
 }
 

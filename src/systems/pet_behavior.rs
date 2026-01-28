@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use crate::components::{
     AnimationIndices, AnimationTimer, AttackRange, AttackTarget, AttackTimer, Damage,
     DetectionRange, EffectSprite, Enemy, Pet, PetMovementSpeed, PetType, Player, Projectile, Team,
-    TimedDespawn, Velocity,
+    TimedDespawn, Velocity, XpGem,
 };
 use crate::resources::{PetSpriteSheet, UpgradeState};
 use crate::systems::spawn_hit_particles;
@@ -17,16 +17,18 @@ pub fn pet_ai_system(
     mut pet_query: Query<
         (
             Entity,
+            &Pet,
             &Transform,
             &mut Velocity,
             &DetectionRange,
-            &AttackRange,
+            Option<&AttackRange>,
             &PetMovementSpeed,
             Option<&AttackTarget>,
         ),
         Without<Player>,
     >,
     enemy_query: Query<(Entity, &Transform), (With<Enemy>, Without<Player>, Without<Pet>)>,
+    xp_gem_query: Query<(Entity, &Transform), With<XpGem>>,
 ) {
     let Ok(player_transform) = player_query.single() else {
         return;
@@ -36,10 +38,15 @@ pub fn pet_ai_system(
         .iter()
         .map(|(entity, transform)| (entity, transform.translation.truncate()))
         .collect();
+    let xp_gems: Vec<Vec2> = xp_gem_query
+        .iter()
+        .map(|(_, transform)| transform.translation.truncate())
+        .collect();
     let mut target_counts: HashMap<Entity, u32> = HashMap::new();
 
     for (
         pet_entity,
+        pet,
         pet_transform,
         mut velocity,
         detection_range,
@@ -49,6 +56,63 @@ pub fn pet_ai_system(
     ) in pet_query.iter_mut()
     {
         let pet_pos = pet_transform.translation.truncate();
+
+        if pet.pet_type == PetType::XpCollector {
+            if current_target.is_some() {
+                commands.entity(pet_entity).remove::<AttackTarget>();
+            }
+
+            let mut best_gem: Option<(Vec2, f32)> = None;
+            for gem_pos in xp_gems.iter() {
+                let distance = pet_pos.distance(*gem_pos);
+                if detection_range.0 > 0.0 && distance <= detection_range.0 {
+                    if let Some((_, best_distance)) = best_gem {
+                        if distance < best_distance {
+                            best_gem = Some((*gem_pos, distance));
+                        }
+                    } else {
+                        best_gem = Some((*gem_pos, distance));
+                    }
+                }
+            }
+
+            let target_velocity = if let Some((gem_pos, distance)) = best_gem {
+                if distance > 20.0 {
+                    let direction = (gem_pos - pet_pos).normalize_or_zero();
+                    direction * movement_speed.0
+                } else {
+                    Vec2::ZERO
+                }
+            } else {
+                let player_pos = player_transform.translation.truncate();
+                let distance_to_player = pet_pos.distance(player_pos);
+
+                let follow_distance = 120.0;
+                let stop_distance = 50.0;
+
+                if distance_to_player > follow_distance {
+                    let direction = (player_pos - pet_pos).normalize_or_zero();
+                    direction * movement_speed.0
+                } else if distance_to_player > stop_distance {
+                    let direction = (player_pos - pet_pos).normalize_or_zero();
+                    let speed_factor =
+                        (distance_to_player - stop_distance) / (follow_distance - stop_distance);
+                    direction * movement_speed.0 * speed_factor
+                } else {
+                    Vec2::ZERO
+                }
+            };
+
+            let decay_rate = 10.0;
+            velocity
+                .0
+                .smooth_nudge(&target_velocity, decay_rate, time.delta_secs());
+            continue;
+        }
+
+        let Some(attack_range) = attack_range else {
+            continue;
+        };
 
         // Ищем ближайшего врага в радиусе обнаружения, распределяя цели между питомцами
         let target_penalty = detection_range.0 * 0.4;
@@ -161,7 +225,10 @@ pub fn pet_projectile_attack_system(
             continue;
         }
 
-        if matches!(pet.pet_type, PetType::GuardDog | PetType::SlimeCompanion) {
+        if matches!(
+            pet.pet_type,
+            PetType::GuardDog | PetType::SlimeCompanion | PetType::XpCollector
+        ) {
             continue;
         }
 
@@ -260,7 +327,7 @@ pub fn pet_projectile_attack_system(
                         piercing,
                         pierced_count: 0,
                         max_pierce,
-                        area_radius: upgrade_state.area_damage_radius,
+                        area_radius: 0.0,
                     },
                     *pet_team,
                     Sprite {
@@ -377,22 +444,6 @@ pub fn projectile_collision_system(
 
                 let impact_pos = enemy_transform.translation.truncate();
                 spawn_hit_particles(&mut commands, impact_pos, Color::srgb(1.0, 0.8, 0.4), 6);
-
-                if projectile.area_radius > 0.0 {
-                    for (splash_entity, splash_transform, splash_team) in enemy_query.iter() {
-                        if splash_entity == enemy_entity || projectile_team.0 == splash_team.0 {
-                            continue;
-                        }
-                        let splash_distance =
-                            impact_pos.distance(splash_transform.translation.truncate());
-                        if splash_distance <= projectile.area_radius {
-                            damage_events.write(crate::systems::combat::DamageEvent {
-                                target: splash_entity,
-                                damage: projectile.damage,
-                            });
-                        }
-                    }
-                }
 
                 // Проверяем пробивание
                 if projectile.piercing && projectile.pierced_count < projectile.max_pierce {

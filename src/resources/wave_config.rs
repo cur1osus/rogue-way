@@ -27,9 +27,9 @@ impl Default for WaveConfig {
             enemies_per_spawn: 1,
             difficulty_multiplier: 1.0,
             game_time: 0.0,
-            boss_5min_spawned: true,
-            boss_10min_spawned: true,
-            boss_15min_spawned: true,
+            boss_5min_spawned: false,
+            boss_10min_spawned: false,
+            boss_15min_spawned: false,
         }
     }
 }

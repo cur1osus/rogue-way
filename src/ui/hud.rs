@@ -1,16 +1,22 @@
 use crate::components::{
-    AttackRange, Boss, Experience, Gold, Health, Hitbox, MovementSpeed, Pet, Player, Team,
+    AttackRange, Boss, Experience, Gold, Health, Hitbox, MovementSpeed, Pet, PickupRadius, Player,
+    Team,
 };
 use crate::constants::{ui_colors, ui_text, UI_FONT_SCALE};
-use crate::resources::{UiFonts, UpgradeState, WaveConfig};
+use crate::resources::{PlayerDamageFlash, UiFonts, UpgradeState, WaveConfig};
 use bevy::math::primitives::{Circle, Rectangle};
 use bevy::prelude::*;
+use bevy::ui::prelude::BorderColor;
 use std::collections::HashSet;
 use sysinfo::System;
 
 /// Общий маркер для всех элементов HUD
 #[derive(Component)]
 pub struct HudUI;
+
+/// Маркер для мигания урона игрока
+#[derive(Component)]
+pub struct PlayerDamageFlashOverlay;
 
 /// Маркер для HP текста
 #[derive(Component)]
@@ -40,6 +46,9 @@ pub struct BossNameText;
 #[derive(Component)]
 pub struct StatsPanel;
 
+#[derive(Component)]
+pub struct DevPanel;
+
 /// Маркеры для текста в панели статов
 #[derive(Component)]
 pub struct StatsHealthText;
@@ -68,6 +77,9 @@ pub struct StatsMemoryText;
 /// Ресурс для управления видимостью панели статов
 #[derive(Resource, Default)]
 pub struct StatsPanelVisible(pub bool);
+
+#[derive(Resource, Default)]
+pub struct DevPanelVisible(pub bool);
 
 #[derive(Resource, Default)]
 pub struct HitboxVisualsVisible(pub bool);
@@ -112,6 +124,9 @@ pub struct HitboxVisual {
     pub owner: Entity,
 }
 
+#[derive(Component)]
+pub struct AreaDamageVisual;
+
 #[derive(Resource)]
 pub struct AttackRangeVisualAssets {
     pub mesh: Handle<Mesh>,
@@ -122,7 +137,13 @@ pub struct AttackRangeVisualAssets {
 
 #[derive(Resource)]
 pub struct HitboxVisualAssets {
-    pub mesh: Handle<Mesh>,
+    pub box_mesh: Handle<Mesh>,
+    pub circle_mesh: Handle<Mesh>,
+    pub material: Handle<ColorMaterial>,
+}
+
+#[derive(Resource)]
+pub struct AreaDamageVisualAssets {
     pub material: Handle<ColorMaterial>,
 }
 
@@ -151,10 +172,25 @@ impl FromWorld for HitboxVisualAssets {
         world.resource_scope(|world, mut meshes: Mut<Assets<Mesh>>| {
             let mut materials = world.resource_mut::<Assets<ColorMaterial>>();
 
-            let mesh = meshes.add(Mesh::from(Rectangle::new(1.0, 1.0)));
-            let material = materials.add(ui_colors::ZONE_XP);
+            let box_mesh = meshes.add(Mesh::from(Rectangle::new(1.0, 1.0)));
+            let circle_mesh = meshes.add(Mesh::from(Circle::new(1.0)));
+            let material = materials.add(ui_colors::HITBOX_COLOR);
 
-            Self { mesh, material }
+            Self {
+                box_mesh,
+                circle_mesh,
+                material,
+            }
+        })
+    }
+}
+
+impl FromWorld for AreaDamageVisualAssets {
+    fn from_world(world: &mut World) -> Self {
+        world.resource_scope(|_world, mut materials: Mut<Assets<ColorMaterial>>| {
+            let material = materials.add(ui_colors::ZONE_SPLASH);
+
+            Self { material }
         })
     }
 }
@@ -163,12 +199,15 @@ impl FromWorld for HitboxVisualAssets {
 pub fn setup_hud(
     mut commands: Commands,
     ui_fonts: Res<UiFonts>,
+    mut player_damage_flash: ResMut<PlayerDamageFlash>,
     existing_hud: Query<Entity, With<HudUI>>,
 ) {
     // Если HUD уже существует, не создаем новый (возврат из LevelUpChoice)
     if !existing_hud.is_empty() {
         return;
     }
+
+    *player_damage_flash = PlayerDamageFlash::default();
 
     let font = ui_fonts.main.clone();
     // HP текст (сверху слева)
@@ -246,6 +285,23 @@ pub fn setup_hud(
         },
         GoldText,
     ));
+
+    // Контур мигания при получении урона
+    commands.spawn((
+        HudUI,
+        PlayerDamageFlashOverlay,
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(0.0),
+            right: Val::Px(0.0),
+            top: Val::Px(0.0),
+            bottom: Val::Px(0.0),
+            border: UiRect::all(Val::Px(10.0)),
+            ..default()
+        },
+        BorderColor::all(Color::NONE),
+        BackgroundColor(Color::NONE),
+    ));
 }
 
 /// Система обновления HUD
@@ -317,6 +373,41 @@ pub fn ui_update_system(
         let seconds = total_seconds % 60;
         text.0 = ui_text::format_hud_time(minutes, seconds);
     }
+}
+
+pub fn player_damage_flash_system(
+    time: Res<Time>,
+    mut flash: ResMut<PlayerDamageFlash>,
+    mut overlay_query: Query<&mut BorderColor, With<PlayerDamageFlashOverlay>>,
+) {
+    if flash.timer.duration().as_secs_f32() <= 0.0 || flash.intensity <= 0.0 {
+        if let Ok(mut border) = overlay_query.single_mut() {
+            *border = BorderColor::all(Color::NONE);
+        }
+        return;
+    }
+
+    flash.timer.tick(time.delta());
+
+    let Ok(mut border) = overlay_query.single_mut() else {
+        if flash.timer.is_finished() {
+            flash.intensity = 0.0;
+        }
+        return;
+    };
+
+    if flash.timer.is_finished() {
+        flash.intensity = 0.0;
+        *border = BorderColor::all(Color::NONE);
+        return;
+    }
+
+    let progress = (flash.timer.elapsed_secs() / flash.timer.duration().as_secs_f32()).min(1.0);
+    let pulse = (progress * std::f32::consts::TAU * 2.0).sin().abs();
+    let fade = 1.0 - progress;
+    let alpha = (0.15 + 0.85 * pulse) * fade * flash.intensity;
+
+    *border = BorderColor::all(Color::srgba(1.0, 0.2, 0.2, alpha));
 }
 
 /// Система отображения полоски здоровья босса
@@ -406,6 +497,16 @@ pub fn toggle_stats_panel_system(
 ) {
     if keyboard_input.just_pressed(KeyCode::KeyT) {
         stats_visible.0 = !stats_visible.0;
+    }
+}
+
+/// Система обработки нажатия клавиши P для показа/скрытия панели разработчика
+pub fn toggle_dev_panel_system(
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    mut dev_visible: ResMut<DevPanelVisible>,
+) {
+    if keyboard_input.just_pressed(KeyCode::KeyP) {
+        dev_visible.0 = !dev_visible.0;
     }
 }
 
@@ -654,6 +755,91 @@ pub fn stats_panel_system(
         });
 }
 
+/// Система создания/обновления панели разработчика
+pub fn dev_panel_system(
+    mut commands: Commands,
+    dev_visible: Res<DevPanelVisible>,
+    mut panel_query: Query<&mut Node, With<DevPanel>>,
+    ui_fonts: Res<UiFonts>,
+) {
+    let mut has_panel = false;
+    for mut node in panel_query.iter_mut() {
+        has_panel = true;
+        node.display = if dev_visible.0 {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+
+    if !dev_visible.0 {
+        return;
+    }
+
+    if has_panel {
+        return;
+    }
+
+    let font = ui_fonts.main.clone();
+
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(10.0),
+                top: Val::Px(60.0),
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::all(Val::Px(15.0)),
+                row_gap: Val::Px(5.0),
+                ..default()
+            },
+            BackgroundColor(ui_colors::OVERLAY_DARKER),
+            DevPanel,
+            HudUI,
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                Text::new(ui_text::DEV_PANEL_TITLE),
+                TextFont {
+                    font: font.clone(),
+                    font_size: 22.0 * UI_FONT_SCALE,
+                    ..default()
+                },
+                TextColor(ui_colors::TEXT_PURPLE_LIGHT),
+                Node {
+                    margin: UiRect::bottom(Val::Px(10.0)),
+                    ..default()
+                },
+            ));
+
+            parent.spawn((
+                Text::new(
+                    "1: XP гем +25\n2: XP гем +100\n3: Монета золота +50\n4: +500 золота\n5: Полное лечение\n6: +100 XP (сразу)\n7: Призвать пса\n8: Призвать огненную фею\n9: Призвать слизня\n0: Призвать ворона",
+                ),
+                TextFont {
+                    font: font.clone(),
+                    font_size: 16.0 * UI_FONT_SCALE,
+                    ..default()
+                },
+                TextColor(ui_colors::TEXT_GRAY_LIGHT),
+            ));
+
+            parent.spawn((
+                Text::new(ui_text::DEV_PANEL_HIDE_HINT),
+                TextFont {
+                    font,
+                    font_size: 14.0 * UI_FONT_SCALE,
+                    ..default()
+                },
+                TextColor(ui_colors::TEXT_GRAY),
+                Node {
+                    margin: UiRect::top(Val::Px(10.0)),
+                    ..default()
+                },
+            ));
+        });
+}
+
 /// Система обновления текста панели статов в реальном времени
 pub fn update_stats_panel_system(
     stats_visible: Res<StatsPanelVisible>,
@@ -792,7 +978,10 @@ pub fn spawn_hitbox_visuals_system(
     mut commands: Commands,
     hitbox_visible: Res<HitboxVisualsVisible>,
     visuals: Res<HitboxVisualAssets>,
-    hitbox_query: Query<(Entity, &GlobalTransform, &Hitbox), Without<HitboxVisual>>,
+    hitbox_query: Query<
+        (Entity, &GlobalTransform, &Hitbox, Option<&PickupRadius>),
+        Without<HitboxVisual>,
+    >,
     visual_query: Query<&HitboxVisual>,
 ) {
     if !hitbox_visible.0 {
@@ -804,16 +993,25 @@ pub fn spawn_hitbox_visuals_system(
         existing.insert(visual.owner);
     }
 
-    for (entity, transform, hitbox) in hitbox_query.iter() {
+    for (entity, transform, hitbox, pickup_radius) in hitbox_query.iter() {
         if existing.contains(&entity) {
             continue;
         }
 
-        let size = hitbox.half_size * 2.0;
+        let size = if let Some(radius) = pickup_radius {
+            Vec2::splat(radius.0 * 2.0)
+        } else {
+            hitbox.half_size * 2.0
+        };
+        let mesh = if pickup_radius.is_some() {
+            visuals.circle_mesh.clone()
+        } else {
+            visuals.box_mesh.clone()
+        };
 
         commands.spawn((
             HitboxVisual { owner: entity },
-            Mesh2d(visuals.mesh.clone()),
+            Mesh2d(mesh),
             MeshMaterial2d(visuals.material.clone()),
             Transform::from_xyz(transform.translation().x, transform.translation().y, 0.15)
                 .with_scale(Vec3::new(size.x, size.y, 1.0)),
@@ -829,30 +1027,44 @@ pub fn update_hitbox_visuals_system(
     mut commands: Commands,
     hitbox_visible: Res<HitboxVisualsVisible>,
     visuals: Res<HitboxVisualAssets>,
-    hitbox_query: Query<(&GlobalTransform, &Hitbox), Without<HitboxVisual>>,
+    hitbox_query: Query<(&GlobalTransform, &Hitbox, Option<&PickupRadius>), Without<HitboxVisual>>,
     mut visual_query: Query<(
         Entity,
         &HitboxVisual,
         &mut Transform,
+        &mut Mesh2d,
         &mut MeshMaterial2d<ColorMaterial>,
     )>,
 ) {
-    for (visual_entity, visual, mut transform, mut material) in visual_query.iter_mut() {
+    for (visual_entity, visual, mut transform, mut mesh, mut material) in visual_query.iter_mut() {
         if !hitbox_visible.0 {
             commands.entity(visual_entity).despawn();
             continue;
         }
 
-        let Ok((owner_transform, hitbox)) = hitbox_query.get(visual.owner) else {
+        let Ok((owner_transform, hitbox, pickup_radius)) = hitbox_query.get(visual.owner) else {
             commands.entity(visual_entity).despawn();
             continue;
         };
 
-        let size = hitbox.half_size * 2.0;
+        let size = if let Some(radius) = pickup_radius {
+            Vec2::splat(radius.0 * 2.0)
+        } else {
+            hitbox.half_size * 2.0
+        };
         transform.translation.x = owner_transform.translation().x;
         transform.translation.y = owner_transform.translation().y;
         transform.translation.z = 0.15;
         transform.scale = Vec3::new(size.x, size.y, 1.0);
+
+        let desired_mesh = if pickup_radius.is_some() {
+            visuals.circle_mesh.clone()
+        } else {
+            visuals.box_mesh.clone()
+        };
+        if mesh.0 != desired_mesh {
+            mesh.0 = desired_mesh;
+        }
 
         if material.0 != visuals.material {
             material.0 = visuals.material.clone();

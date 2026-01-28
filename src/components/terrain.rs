@@ -11,5 +11,6 @@ pub struct TerrainTile;
 #[derive(Component)]
 pub struct TerrainDecoration;
 
+#[allow(dead_code)]
 #[derive(Component)]
 pub struct TerrainCloud;

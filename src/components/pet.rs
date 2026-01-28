@@ -17,6 +17,7 @@ pub enum PetType {
     FireSprite,     // Damage 5, Speed 2.0/sec, Range 200, пробивающие снаряды
     SlimeCompanion, // Damage 15, Speed 0.5/sec, Range 100, замедляет врагов
     CrowScout,      // Damage 8, Speed 1.5/sec, Range 250, летает над препятствиями
+    XpCollector,    // Собирает XP гемы, не атакует
 }
 
 impl PetType {
@@ -27,6 +28,7 @@ impl PetType {
             PetType::FireSprite => "Огненная фея",
             PetType::SlimeCompanion => "Слизень-спутник",
             PetType::CrowScout => "Ворон-разведчик",
+            PetType::XpCollector => "Пёс-собиратель опыта",
         }
     }
 
@@ -37,6 +39,7 @@ impl PetType {
             PetType::FireSprite => pet_sizes::FIRE_SPRITE,
             PetType::SlimeCompanion => pet_sizes::SLIME_COMPANION,
             PetType::CrowScout => pet_sizes::CROW_SCOUT,
+            PetType::XpCollector => pet_sizes::XP_COLLECTOR,
         }
     }
 
@@ -47,6 +50,7 @@ impl PetType {
             PetType::FireSprite => "fire_sprite".to_string(),
             PetType::SlimeCompanion => "slime".to_string(),
             PetType::CrowScout => "crow_scout".to_string(),
+            PetType::XpCollector => "xp_dog".to_string(),
         }
     }
 
@@ -82,16 +86,25 @@ impl PetType {
                 pet_detection_ranges::CROW_SCOUT,
                 220.0,
             ),
+            PetType::XpCollector => (
+                0.0,
+                1.0,
+                pet_attack_ranges::XP_COLLECTOR,
+                pet_detection_ranges::XP_COLLECTOR,
+                140.0,
+            ),
         }
     }
 
     /// Получить цвет спрайта питомца (временно вместо текстур)
+    #[allow(dead_code)]
     pub fn get_color(&self) -> Color {
         match self {
             PetType::GuardDog => Color::srgb(0.6, 0.4, 0.2), // Коричневый
             PetType::FireSprite => Color::srgb(1.0, 0.3, 0.0), // Оранжевый
             PetType::SlimeCompanion => Color::srgb(0.2, 0.8, 0.3), // Зеленый
             PetType::CrowScout => Color::srgb(0.1, 0.1, 0.2), // Темно-синий
+            PetType::XpCollector => Color::srgb(0.7, 0.5, 0.3), // Песочный
         }
     }
 }
@@ -115,6 +128,10 @@ pub struct DetectionRange(pub f32);
 /// Скорость движения питомца
 #[derive(Component)]
 pub struct PetMovementSpeed(pub f32);
+
+/// Радиус подбора (для визуализации хитбоксов)
+#[derive(Component)]
+pub struct PickupRadius(pub f32);
 
 /// Таймер кулдауна атаки
 #[derive(Component)]
@@ -159,10 +176,12 @@ pub struct PendingAttack {
 }
 
 /// Угол вращения вокруг игрока (для Guard Dog)
+#[allow(dead_code)]
 #[derive(Component)]
 pub struct OrbitAngle(pub f32);
 
 /// Радиус орбиты вокруг игрока (для Guard Dog)
+#[allow(dead_code)]
 #[derive(Component)]
 pub struct OrbitRadius(pub f32);
 
@@ -175,7 +194,8 @@ pub struct Projectile {
     pub piercing: bool,     // Пробивает ли врагов (для Fire Sprite)
     pub pierced_count: u32, // Сколько врагов пробито
     pub max_pierce: u32,    // Максимум пробиваний
-    pub area_radius: f32,   // Радиус урона по площади (0 = без AoE)
+    #[allow(dead_code)]
+    pub area_radius: f32, // Радиус урона по площади (0 = без AoE)
 }
 
 /// Компонент замедления (для Slime Companion)

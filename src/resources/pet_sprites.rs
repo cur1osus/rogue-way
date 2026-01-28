@@ -28,12 +28,17 @@ pub struct PetSpriteSheet {
 
     pub crow_idle: PetAnimationSheet,
     pub crow_run: PetAnimationSheet,
+
+    pub xp_dog_run: PetAnimationSheet,
+    pub xp_dog_idle: Vec<PetAnimationSheet>,
 }
 
 impl FromWorld for PetSpriteSheet {
     fn from_world(world: &mut World) -> Self {
         world.resource_scope(|world, asset_server: Mut<AssetServer>| {
             let mut texture_atlas_layouts = world.resource_mut::<Assets<TextureAtlasLayout>>();
+            let dog_frame_size = Vec2::new(128.0, 128.0);
+            let dog_columns = 8;
 
             Self {
                 // Guard Dog = Blue Warrior
@@ -120,6 +125,42 @@ impl FromWorld for PetSpriteSheet {
                     Vec2::new(320.0, 320.0),
                     6,
                 ),
+
+                xp_dog_run: build_pet_sheet(
+                    &asset_server,
+                    &mut texture_atlas_layouts,
+                    "sprites/dog/Sprite-0001.png",
+                    dog_frame_size,
+                    dog_columns,
+                ),
+                xp_dog_idle: [
+                    "sprites/dog/Sprite-0002.png",
+                    "sprites/dog/Sprite-0003.png",
+                    "sprites/dog/Sprite-0004.png",
+                    "sprites/dog/Sprite-0006.png",
+                    "sprites/dog/Sprite-0007.png",
+                    "sprites/dog/Sprite-0008.png",
+                    "sprites/dog/Sprite-0009.png",
+                    "sprites/dog/Sprite-0010.png",
+                    "sprites/dog/Sprite-0012.png",
+                    "sprites/dog/Sprite-0013.png",
+                    "sprites/dog/Sprite-0014.png",
+                    "sprites/dog/Sprite-0015.png",
+                    "sprites/dog/Sprite-0017.png",
+                    "sprites/dog/Sprite-0018.png",
+                    "sprites/dog/Sprite-0019.png",
+                ]
+                .iter()
+                .map(|path| {
+                    build_pet_sheet(
+                        &asset_server,
+                        &mut texture_atlas_layouts,
+                        path,
+                        dog_frame_size,
+                        dog_columns,
+                    )
+                })
+                .collect(),
             }
         })
     }
@@ -159,6 +200,7 @@ impl PetSpriteSheet {
             PetType::FireSprite => &self.fire_sprite_idle,
             PetType::SlimeCompanion => &self.slime_idle,
             PetType::CrowScout => &self.crow_idle,
+            PetType::XpCollector => self.xp_dog_idle.first().unwrap_or(&self.xp_dog_run),
         }
     }
 
@@ -169,11 +211,13 @@ impl PetSpriteSheet {
             PetType::FireSprite => &self.fire_sprite_shoot,
             PetType::SlimeCompanion => &self.slime_heal,
             PetType::CrowScout => &self.crow_run,
+            PetType::XpCollector => &self.xp_dog_run,
         }
     }
 }
 
 /// Ресурс для эффектов частиц
+#[allow(dead_code)]
 #[derive(Resource)]
 pub struct ParticleEffects {
     pub fire_01: Handle<Image>,

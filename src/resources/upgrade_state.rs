@@ -11,6 +11,7 @@ pub struct UpgradeState {
     pub projectile_pierce_bonus: u32,
     pub area_damage_radius: f32,
     pub gold_drop_mult: f32,
+    #[allow(dead_code)]
     pub is_choosing_upgrade: bool, // Флаг паузы во время выбора апгрейда
 }
 
