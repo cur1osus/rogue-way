@@ -21,27 +21,27 @@ pub fn pickup_system(
         return;
     };
 
-    let xp_collectors: Vec<Vec2> = pet_query
-        .iter()
-        .filter_map(|(transform, pet)| {
-            if pet.pet_type == PetType::XpCollector {
-                Some(transform.translation.truncate())
-            } else {
-                None
-            }
-        })
-        .collect();
+    let mut xp_collectors = Vec::with_capacity(pet_query.iter().size_hint().0);
+    for (transform, pet) in pet_query.iter() {
+        if pet.pet_type == PetType::XpCollector {
+            xp_collectors.push(transform.translation.truncate());
+        }
+    }
+
+    let player_pos = player_transform.translation.truncate();
+    let xp_pickup_radius_sq = XP_PICKUP_RADIUS * XP_PICKUP_RADIUS;
+    let gold_pickup_radius_sq = GOLD_PICKUP_RADIUS * GOLD_PICKUP_RADIUS;
 
     // Подбор XP
     for (gem_entity, gem_transform, gem) in gem_query.iter() {
-        let gem_pos = gem_transform.translation;
-        let distance = player_transform.translation.distance(gem_pos);
-        let picked_by_pet = distance > XP_PICKUP_RADIUS
+        let gem_pos = gem_transform.translation.truncate();
+        let distance_sq = player_pos.distance_squared(gem_pos);
+        let picked_by_pet = distance_sq > xp_pickup_radius_sq
             && xp_collectors
                 .iter()
-                .any(|pos| pos.distance(gem_pos.truncate()) <= XP_PICKUP_RADIUS);
+                .any(|pos| pos.distance_squared(gem_pos) <= xp_pickup_radius_sq);
 
-        if distance <= XP_PICKUP_RADIUS || picked_by_pet {
+        if distance_sq <= xp_pickup_radius_sq || picked_by_pet {
             commands.entity(gem_entity).despawn();
             gain_xp_events.write(GainXpEvent { amount: gem.value });
         }
@@ -49,11 +49,9 @@ pub fn pickup_system(
 
     // Подбор золота
     for (gold_entity, gold_transform, gold_pickup) in gold_query.iter() {
-        let distance = player_transform
-            .translation
-            .distance(gold_transform.translation);
-
-        if distance <= GOLD_PICKUP_RADIUS {
+        let gold_pos = gold_transform.translation.truncate();
+        let distance_sq = player_pos.distance_squared(gold_pos);
+        if distance_sq <= gold_pickup_radius_sq {
             player_gold.add(gold_pickup.value);
             commands.entity(gold_entity).despawn();
         }

@@ -2,7 +2,9 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 
 use crate::components::*;
-use crate::constants::{ENEMY_SOFT_COLLISION_SCALE, PET_SOFT_COLLISION_SCALE};
+use crate::constants::{
+    ENEMY_SOFT_COLLISION_SCALE, PET_ENEMY_COLLISION_SCALE, PET_SOFT_COLLISION_SCALE,
+};
 use crate::resources::{PhysicsAccumulator, FIXED_TIMESTEP};
 
 /// Основная физическая система с fixed timestep
@@ -36,12 +38,11 @@ pub fn physics_update_system(
         }
 
         // Шаг 3: Собираем коллайдеры для проверки (read-only проход)
-        let colliders: Vec<(Entity, Vec2, Vec2, u32)> = query
-            .iter()
-            .map(|(entity, physics_pos, _, _, hitbox, layer)| {
-                (entity, physics_pos.0, hitbox.half_size, layer.group)
-            })
-            .collect();
+        let mut colliders: Vec<(Entity, Vec2, Vec2, u32)> =
+            Vec::with_capacity(query.iter().size_hint().0);
+        for (entity, physics_pos, _, _, hitbox, layer) in query.iter() {
+            colliders.push((entity, physics_pos.0, hitbox.half_size, layer.group));
+        }
 
         // Шаг 4: Вычисляем коррекции коллизий
         let corrections = compute_collision_corrections(&colliders);
@@ -89,7 +90,7 @@ fn compute_collision_corrections(colliders: &[(Entity, Vec2, Vec2, u32)]) -> Has
         }
     }
 
-    let mut corrections: HashMap<Entity, Vec2> = HashMap::new();
+    let mut corrections: HashMap<Entity, Vec2> = HashMap::with_capacity(colliders.len());
 
     // Функция разрешения пары коллизий
     let resolve_pair = |a: Collider,
@@ -134,7 +135,13 @@ fn compute_collision_corrections(colliders: &[(Entity, Vec2, Vec2, u32)]) -> Has
     // Коллизии питомец-враги
     for pet in pets.iter().copied() {
         for enemy in enemies.iter().copied() {
-            resolve_pair(pet, enemy, 1.0, 1.0, &mut corrections);
+            resolve_pair(
+                pet,
+                enemy,
+                PET_ENEMY_COLLISION_SCALE,
+                PET_ENEMY_COLLISION_SCALE,
+                &mut corrections,
+            );
         }
     }
 

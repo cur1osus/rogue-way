@@ -1,14 +1,19 @@
 use crate::components::{
-    AttackRange, Boss, Experience, Gold, Health, Hitbox, MovementSpeed, Pet, PickupRadius, Player,
-    Team,
+    AttackRange, Boss, Enemy, EnemyHpIndicator, EnemyHpSegment, EnemyHpText, Experience, Gold,
+    Health, Hitbox, MovementSpeed, Pet, PickupRadius, Player, Team,
 };
-use crate::constants::{ui_colors, ui_text, UI_FONT_SCALE};
+use crate::constants::{
+    ui_colors, ui_text, ENEMY_HP_INDICATOR_MIN_RADIUS, ENEMY_HP_INDICATOR_MIN_SEGMENT_RADIUS,
+    ENEMY_HP_INDICATOR_OFFSET, ENEMY_HP_INDICATOR_RADIUS_MULT, ENEMY_HP_INDICATOR_SEGMENT_SCALE,
+    ENEMY_HP_SEGMENTS, UI_FONT_SCALE,
+};
 use crate::resources::{PlayerDamageFlash, UiFonts, UpgradeState, WaveConfig};
 use bevy::math::primitives::{Circle, Rectangle};
 use bevy::prelude::*;
 use bevy::ui::prelude::BorderColor;
 use std::collections::HashSet;
-use sysinfo::System;
+use std::f32::consts::{FRAC_PI_2, TAU};
+use sysinfo::{ProcessRefreshKind, System};
 
 /// Общий маркер для всех элементов HUD
 #[derive(Component)]
@@ -72,6 +77,12 @@ pub struct StatsUpgradesText;
 pub struct StatsFpsText;
 
 #[derive(Component)]
+pub struct StatsCpuText;
+
+#[derive(Component)]
+pub struct StatsCpuCoresText;
+
+#[derive(Component)]
 pub struct StatsMemoryText;
 
 /// Ресурс для управления видимостью панели статов
@@ -88,6 +99,9 @@ pub struct HitboxVisualsVisible(pub bool);
 pub struct PerformanceStats {
     pub fps: f32,
     pub memory_mb: f32,
+    pub cpu_percent: f32,
+    pub cpu_cores_used: f32,
+    pub cpu_cores_total: usize,
     frame_timer: Timer,
     frame_count: u32,
     system: System,
@@ -106,6 +120,9 @@ impl Default for PerformanceStats {
         Self {
             fps: 0.0,
             memory_mb: 0.0,
+            cpu_percent: 0.0,
+            cpu_cores_used: 0.0,
+            cpu_cores_total: 0,
             frame_timer: Timer::from_seconds(1.0, TimerMode::Repeating),
             frame_count: 0,
             system,
@@ -144,6 +161,12 @@ pub struct HitboxVisualAssets {
 
 #[derive(Resource)]
 pub struct AreaDamageVisualAssets {
+    pub material: Handle<ColorMaterial>,
+}
+
+#[derive(Resource)]
+pub struct EnemyHpIndicatorAssets {
+    pub mesh: Handle<Mesh>,
     pub material: Handle<ColorMaterial>,
 }
 
@@ -191,6 +214,18 @@ impl FromWorld for AreaDamageVisualAssets {
             let material = materials.add(ui_colors::ZONE_SPLASH);
 
             Self { material }
+        })
+    }
+}
+
+impl FromWorld for EnemyHpIndicatorAssets {
+    fn from_world(world: &mut World) -> Self {
+        world.resource_scope(|world, mut meshes: Mut<Assets<Mesh>>| {
+            let mut materials = world.resource_mut::<Assets<ColorMaterial>>();
+            let mesh = meshes.add(Mesh::from(Circle::new(1.0)));
+            let material = materials.add(ui_colors::HP_BAR);
+
+            Self { mesh, material }
         })
     }
 }
@@ -529,12 +564,38 @@ pub fn performance_stats_system(time: Res<Time>, mut perf: ResMut<PerformanceSta
         perf.frame_count = 0;
 
         if let Some(pid) = perf.pid {
-            perf.system.refresh_pids(&[pid]);
-            if let Some(process) = perf.system.process(pid) {
-                perf.memory_mb = process.memory() as f32 / (1024.0 * 1024.0);
-            }
+            perf.system
+                .refresh_pids_specifics(&[pid], ProcessRefreshKind::new().with_cpu().with_memory());
+            let cores_total = perf.system.cpus().len();
+            let (memory_mb, cpu_percent, cpu_cores_used) =
+                if let Some(process) = perf.system.process(pid) {
+                    let memory_mb = process.memory() as f32 / (1024.0 * 1024.0);
+                    let cpu_percent_total = process.cpu_usage();
+                    let cores_used = (cpu_percent_total / 100.0).max(0.0);
+                    let cores_total_f = cores_total as f32;
+                    let cpu_percent = if cores_total_f > 0.0 {
+                        cpu_percent_total / cores_total_f
+                    } else {
+                        0.0
+                    };
+                    let cpu_cores_used = if cores_total_f > 0.0 {
+                        cores_used.min(cores_total_f)
+                    } else {
+                        cores_used
+                    };
+                    (memory_mb, cpu_percent, cpu_cores_used)
+                } else {
+                    (0.0, 0.0, 0.0)
+                };
+            perf.memory_mb = memory_mb;
+            perf.cpu_percent = cpu_percent;
+            perf.cpu_cores_used = cpu_cores_used;
+            perf.cpu_cores_total = cores_total;
         } else {
             perf.system.refresh_processes();
+            perf.cpu_percent = 0.0;
+            perf.cpu_cores_used = 0.0;
+            perf.cpu_cores_total = 0;
         }
     }
 }
@@ -688,6 +749,31 @@ pub fn stats_panel_system(
                 },
                 TextColor(ui_colors::TEXT_CYAN_LIGHT),
                 StatsFpsText,
+            ));
+
+            parent.spawn((
+                Text::new(ui_text::format_cpu_usage(perf_stats.cpu_percent)),
+                TextFont {
+                    font: font.clone(),
+                    font_size: 16.0 * UI_FONT_SCALE,
+                    ..default()
+                },
+                TextColor(ui_colors::TEXT_CYAN_LIGHT),
+                StatsCpuText,
+            ));
+
+            parent.spawn((
+                Text::new(ui_text::format_cpu_cores_used(
+                    perf_stats.cpu_cores_used,
+                    perf_stats.cpu_cores_total,
+                )),
+                TextFont {
+                    font: font.clone(),
+                    font_size: 16.0 * UI_FONT_SCALE,
+                    ..default()
+                },
+                TextColor(ui_colors::TEXT_CYAN_LIGHT),
+                StatsCpuCoresText,
             ));
 
             parent.spawn((
@@ -856,6 +942,8 @@ pub fn update_stats_panel_system(
         Option<&StatsSpeedText>,
         Option<&StatsUpgradesText>,
         Option<&StatsFpsText>,
+        Option<&StatsCpuText>,
+        Option<&StatsCpuCoresText>,
         Option<&StatsMemoryText>,
     )>,
 ) {
@@ -870,8 +958,19 @@ pub fn update_stats_panel_system(
     let pet_count = pet_query.iter().count();
     let upgrades_text = build_upgrades_text(pet_count, &upgrade_state);
 
-    for (mut text, is_health, is_level, is_xp, is_gold, is_speed, is_upgrades, is_fps, is_memory) in
-        stats_text_query.iter_mut()
+    for (
+        mut text,
+        is_health,
+        is_level,
+        is_xp,
+        is_gold,
+        is_speed,
+        is_upgrades,
+        is_fps,
+        is_cpu,
+        is_cpu_cores,
+        is_memory,
+    ) in stats_text_query.iter_mut()
     {
         if is_health.is_some() {
             text.0 = ui_text::format_hud_health(health.current, health.max);
@@ -887,6 +986,13 @@ pub fn update_stats_panel_system(
             text.0 = upgrades_text.clone();
         } else if is_fps.is_some() {
             text.0 = ui_text::format_fps(perf_stats.fps);
+        } else if is_cpu.is_some() {
+            text.0 = ui_text::format_cpu_usage(perf_stats.cpu_percent);
+        } else if is_cpu_cores.is_some() {
+            text.0 = ui_text::format_cpu_cores_used(
+                perf_stats.cpu_cores_used,
+                perf_stats.cpu_cores_total,
+            );
         } else if is_memory.is_some() {
             text.0 = ui_text::format_memory(perf_stats.memory_mb);
         }
@@ -1072,6 +1178,113 @@ pub fn update_hitbox_visuals_system(
     }
 }
 
+pub fn spawn_enemy_hp_indicator_system(
+    mut commands: Commands,
+    assets: Res<EnemyHpIndicatorAssets>,
+    ui_fonts: Res<UiFonts>,
+    enemy_query: Query<(Entity, &Transform, &Hitbox), Added<Enemy>>,
+) {
+    for (enemy_entity, transform, hitbox) in enemy_query.iter() {
+        let parent_scale = transform.scale.x.max(0.0001);
+        let inverse_scale = 1.0 / parent_scale;
+        let base_radius = hitbox.half_size.x.max(hitbox.half_size.y);
+        let world_ring_radius =
+            (base_radius * ENEMY_HP_INDICATOR_RADIUS_MULT).max(ENEMY_HP_INDICATOR_MIN_RADIUS);
+        let world_segment_radius = (world_ring_radius * ENEMY_HP_INDICATOR_SEGMENT_SCALE)
+            .max(ENEMY_HP_INDICATOR_MIN_SEGMENT_RADIUS);
+        let ring_radius = world_ring_radius * inverse_scale;
+        let segment_radius = world_segment_radius * inverse_scale;
+        let offset_y = (hitbox.half_size.y + ENEMY_HP_INDICATOR_OFFSET) * inverse_scale;
+        let offset_z = 2.0 * inverse_scale;
+        let angle_step = TAU / ENEMY_HP_SEGMENTS as f32;
+        let font_size = (world_ring_radius * 0.9).clamp(8.0, 14.0) * UI_FONT_SCALE;
+
+        commands.entity(enemy_entity).with_children(|parent| {
+            parent
+                .spawn((
+                    EnemyHpIndicator,
+                    Transform::from_xyz(0.0, offset_y, offset_z),
+                    GlobalTransform::default(),
+                    Visibility::Visible,
+                    InheritedVisibility::default(),
+                    ViewVisibility::default(),
+                ))
+                .with_children(|indicator| {
+                    indicator.spawn((
+                        EnemyHpText,
+                        Text2d::new("0"),
+                        TextFont {
+                            font: ui_fonts.main.clone(),
+                            font_size,
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                        TextLayout::new_with_justify(Justify::Center),
+                        Transform::from_xyz(0.0, 0.0, 0.1).with_scale(Vec3::splat(inverse_scale)),
+                        GlobalTransform::default(),
+                        Visibility::Visible,
+                        InheritedVisibility::default(),
+                        ViewVisibility::default(),
+                    ));
+                    for index in 0..ENEMY_HP_SEGMENTS {
+                        let angle = -FRAC_PI_2 + angle_step * index as f32;
+                        let offset = Vec2::new(angle.cos(), angle.sin()) * ring_radius;
+
+                        indicator.spawn((
+                            EnemyHpSegment { index: index as u8 },
+                            Mesh2d(assets.mesh.clone()),
+                            MeshMaterial2d(assets.material.clone()),
+                            Transform::from_xyz(offset.x, offset.y, 0.0)
+                                .with_scale(Vec3::splat(segment_radius)),
+                            GlobalTransform::default(),
+                            Visibility::Visible,
+                            InheritedVisibility::default(),
+                            ViewVisibility::default(),
+                        ));
+                    }
+                });
+        });
+    }
+}
+
+pub fn update_enemy_hp_indicator_system(
+    enemy_query: Query<&Health, With<Enemy>>,
+    indicator_query: Query<(&ChildOf, &Children), With<EnemyHpIndicator>>,
+    mut segment_query: Query<(&EnemyHpSegment, &mut Visibility)>,
+    mut text_query: Query<&mut Text2d, With<EnemyHpText>>,
+) {
+    for (parent, children) in indicator_query.iter() {
+        let Ok(health) = enemy_query.get(parent.0) else {
+            continue;
+        };
+
+        let visible_segments = if health.max > 0.0 && health.current > 0.0 {
+            let ratio = (health.current / health.max).clamp(0.0, 1.0);
+            let raw = (ratio * ENEMY_HP_SEGMENTS as f32).ceil() as usize;
+            raw.max(1).min(ENEMY_HP_SEGMENTS)
+        } else {
+            0
+        };
+
+        for segment_entity in children.iter() {
+            if let Ok((segment, mut visibility)) = segment_query.get_mut(segment_entity) {
+                let should_show = (segment.index as usize) < visible_segments;
+                *visibility = if should_show {
+                    Visibility::Visible
+                } else {
+                    Visibility::Hidden
+                };
+            }
+        }
+
+        for text_entity in children.iter() {
+            if let Ok(mut text) = text_query.get_mut(text_entity) {
+                text.0 = format!("{:.0}", health.current.max(0.0));
+            }
+        }
+    }
+}
+
 fn build_upgrades_text(pet_count: usize, upgrade_state: &UpgradeState) -> String {
     let mut lines = Vec::new();
 
@@ -1081,6 +1294,9 @@ fn build_upgrades_text(pet_count: usize, upgrade_state: &UpgradeState) -> String
     ));
     lines.push(ui_text::format_attack_speed_mult(
         upgrade_state.pet_attack_speed_mult,
+    ));
+    lines.push(ui_text::format_pet_movement_speed_mult(
+        upgrade_state.pet_movement_speed_mult,
     ));
     lines.push(ui_text::format_range_bonus(upgrade_state.pet_range_bonus));
 
@@ -1096,9 +1312,9 @@ fn build_upgrades_text(pet_count: usize, upgrade_state: &UpgradeState) -> String
         ));
     }
 
-    if upgrade_state.area_damage_radius > 0.0 {
+    if upgrade_state.area_damage_cone_angle_deg > 0.0 {
         lines.push(ui_text::format_area_damage(
-            upgrade_state.area_damage_radius,
+            upgrade_state.area_damage_cone_angle_deg,
         ));
     }
 

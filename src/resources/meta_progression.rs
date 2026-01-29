@@ -104,7 +104,7 @@ impl SaveData {
     fn get_save_path() -> PathBuf {
         // Используем стандартную директорию для данных приложения
         let mut path = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
-        path.push("MerchantsMenagerie");
+        path.push("Roggy");
 
         // Создаем директорию если её нет
         if !path.exists() {

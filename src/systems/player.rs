@@ -4,10 +4,10 @@ use rand::seq::SliceRandom;
 
 use crate::components::{
     AnimationIndices, AnimationTimer, AttackRange, AttackSpeed, AttackTimer, CollisionLayer,
-    Damage, DetectionRange, Experience, Gold, Health, Hitbox, MovementSpeed, Pet, PetMovementSpeed,
-    PetType, PhysicsPosition, PickupRadius, Player, PlayerAnimation, PreviousPhysicsPosition,
-    PushbackAttack, PushbackAttackCooldown, PushbackReadyGlow, PushbackReadyGlowPending, Team,
-    Velocity,
+    Damage, DetectionRange, Experience, Gold, Health, Hitbox, MovementSpeed, Pet, PetBlackboard,
+    PetMovementSpeed, PetType, PhysicsPosition, PickupRadius, Player, PlayerAnimation,
+    PreviousPhysicsPosition, PushbackAttack, PushbackAttackCooldown, PushbackReadyGlow,
+    PushbackReadyGlowPending, Team, Velocity,
 };
 use crate::constants::{
     PET_HITBOX_SCALE, PLAYER_HITBOX_SCALE, PLAYER_SCALE, PUSHBACK_READY_GLOW_SCALE,
@@ -64,7 +64,7 @@ pub fn setup_player(
     // Применяем постоянные улучшения из метапрогрессии (§3.2.2, §3.2.3)
     let upgrades = &meta.save_data.permanent_upgrades;
     let base_hp = upgrades.get_max_hp();
-    let base_speed = 100.0 * upgrades.get_movement_speed_multiplier();
+    let base_speed = 200.0 * upgrades.get_movement_speed_multiplier();
     let starting_level = upgrades.get_starting_level();
     let starting_gold = upgrades.get_starting_gold();
 
@@ -278,7 +278,7 @@ pub fn spawn_pet(
         base_movement_speed,
     ) = pet_type.get_stats();
     let detection_range = base_detection_range + upgrades.pet_detection_range_bonus;
-    let movement_speed = base_movement_speed;
+    let movement_speed = base_movement_speed * upgrades.pet_movement_speed_mult;
 
     // Получаем спрайт для питомца
     let sprite_sheet = if pet_type == PetType::XpCollector {
@@ -321,6 +321,7 @@ pub fn spawn_pet(
         Velocity::default(),
         PhysicsPosition(position),
         PreviousPhysicsPosition(position),
+        PetBlackboard::new(pet_type.get_role()),
     ));
 
     if pet_type == PetType::XpCollector {

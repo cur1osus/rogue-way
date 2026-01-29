@@ -1,10 +1,10 @@
 use bevy::prelude::*;
 
 use crate::components::{
-    AttackRange, AttackSpeed, AttackTimer, Damage, Health, MovementSpeed, Pet, PetType, Player,
-    PushbackAttack,
+    AttackRange, AttackSpeed, AttackTimer, Damage, Health, MovementSpeed, Pet, PetMovementSpeed,
+    PetType, Player, PushbackAttack,
 };
-use crate::constants::{ui_colors, ui_text, UI_FONT_SCALE};
+use crate::constants::{ui_colors, ui_text, AREA_DAMAGE_CONE_ANGLE_MAX_DEG, UI_FONT_SCALE};
 use crate::resources::{MetaProgression, PetSpriteSheet, UiFonts, UpgradeState};
 use crate::systems::player::spawn_pet;
 use rand::seq::SliceRandom;
@@ -16,6 +16,7 @@ pub enum GameState {
     MainMenu,
     Shop,
     Playing,
+    Paused,
     LevelUpChoice,
 }
 
@@ -36,9 +37,10 @@ pub enum UpgradeType {
     SummonPet(PetType),
 
     // Улучшения питомцев
-    PetDamageBoost(f32),      // +X% урона всем питомцам
-    PetAttackSpeedBoost(f32), // +X% скорости атаки
-    PetRangeBoost(f32),       // +X дальности
+    PetDamageBoost(f32),        // +X% урона всем питомцам
+    PetAttackSpeedBoost(f32),   // +X% скорости атаки
+    PetRangeBoost(f32),         // +X дальности
+    PetMovementSpeedBoost(f32), // +X% скорости передвижения
 
     // Улучшения игрока
     MaxHpBoost(f32),         // +X максимального HP
@@ -50,7 +52,7 @@ pub enum UpgradeType {
     // Специальные способности
     MultiShot,       // Питомцы стреляют дополнительным снарядом
     Piercing,        // Снаряды пробивают +1 врага
-    AreaDamage(f32), // Урон в радиусе X
+    AreaDamage(f32), // Урон по площади: угол сплеша в градусах
 
     // Экономика
     GoldDropBoost(f32), // +X% золота с врагов
@@ -66,6 +68,9 @@ impl UpgradeType {
                 format!("Скорость атаки +{:.0}%", amount * 100.0)
             }
             UpgradeType::PetRangeBoost(amount) => format!("Дальность +{:.0}", amount),
+            UpgradeType::PetMovementSpeedBoost(amount) => {
+                format!("Скорость питомцев +{:.0}%", amount * 100.0)
+            }
             UpgradeType::MaxHpBoost(amount) => format!("Макс. ОЗ +{:.0}", amount),
             UpgradeType::HealPlayer(amount) => format!("Лечение {:.0}%", amount * 100.0),
             UpgradeType::MovementSpeedBoost(amount) => format!("Скорость +{:.0}%", amount * 100.0),
@@ -77,7 +82,9 @@ impl UpgradeType {
             }
             UpgradeType::MultiShot => "Мульти-выстрел".to_string(),
             UpgradeType::Piercing => "Пробивание".to_string(),
-            UpgradeType::AreaDamage(radius) => format!("Урон по площади ({:.0})", radius),
+            UpgradeType::AreaDamage(angle_deg) => {
+                format!("Угол сплеша +{:.0}°", angle_deg)
+            }
             UpgradeType::GoldDropBoost(amount) => format!("Золото +{:.0}%", amount * 100.0),
         }
     }
@@ -86,15 +93,16 @@ impl UpgradeType {
     pub fn get_description(&self) -> String {
         match self {
             UpgradeType::SummonPet(pet_type) => match pet_type {
-                PetType::GuardDog => "Кружится вокруг вас и атакует врагов".to_string(),
-                PetType::FireSprite => "Стреляет пробивающими снарядами".to_string(),
-                PetType::SlimeCompanion => "Замедляет врагов при попадании".to_string(),
-                PetType::CrowScout => "Быстрый питомец с большой дальностью".to_string(),
-                PetType::XpCollector => "Подбирает XP гемы рядом".to_string(),
+                PetType::GuardDog => "Воин ближнего боя, держится рядом и рубит врагов".to_string(),
+                PetType::FireSprite => "Лучник, выпускает стрелы на дальнюю дистанцию".to_string(),
+                PetType::SlimeCompanion => "Монах поддержки, замедляет врагов ударами".to_string(),
+                PetType::CrowScout => "Разведчик с копьем и большой дальностью".to_string(),
+                PetType::XpCollector => "Пёс-собиратель, подбирает XP гемы рядом".to_string(),
             },
             UpgradeType::PetDamageBoost(_) => "Увеличивает урон всех питомцев".to_string(),
             UpgradeType::PetAttackSpeedBoost(_) => "Питомцы атакуют быстрее".to_string(),
             UpgradeType::PetRangeBoost(_) => "Увеличивает дальность атаки питомцев".to_string(),
+            UpgradeType::PetMovementSpeedBoost(_) => "Питомцы перемещаются быстрее".to_string(),
             UpgradeType::MaxHpBoost(_) => "Увеличивает максимальное здоровье".to_string(),
             UpgradeType::HealPlayer(_) => "Мгновенно восстанавливает здоровье".to_string(),
             UpgradeType::MovementSpeedBoost(_) => "Вы двигаетесь быстрее".to_string(),
@@ -104,7 +112,7 @@ impl UpgradeType {
             }
             UpgradeType::MultiShot => "Питомцы стреляют двойным залпом".to_string(),
             UpgradeType::Piercing => "Снаряды пробивают больше врагов".to_string(),
-            UpgradeType::AreaDamage(_) => "Атаки наносят урон в радиусе".to_string(),
+            UpgradeType::AreaDamage(_) => "Атаки наносят урон в секторе".to_string(),
             UpgradeType::GoldDropBoost(_) => "Больше золота с каждого врага".to_string(),
         }
     }
@@ -125,6 +133,8 @@ impl UpgradeType {
             UpgradeType::PetAttackSpeedBoost(0.25),
             UpgradeType::PetRangeBoost(30.0),
             UpgradeType::PetRangeBoost(50.0),
+            UpgradeType::PetMovementSpeedBoost(0.15),
+            UpgradeType::PetMovementSpeedBoost(0.25),
             // Улучшения игрока
             UpgradeType::MaxHpBoost(20.0),
             UpgradeType::MaxHpBoost(30.0),
@@ -144,7 +154,7 @@ impl UpgradeType {
         ]
     }
 
-    /// Выбрать 3 случайных апгрейда с учётом разблокированных питомцев (§3.2.1)
+    /// Выбрать 4 случайных апгрейда с учётом разблокированных питомцев (§3.2.1)
     pub fn choose_random_upgrades(meta: &MetaProgression) -> Vec<UpgradeType> {
         let mut rng = rand::thread_rng();
         let all_upgrades = Self::get_all_upgrades();
@@ -162,7 +172,7 @@ impl UpgradeType {
             .collect();
 
         available_upgrades
-            .choose_multiple(&mut rng, 3.min(available_upgrades.len()))
+            .choose_multiple(&mut rng, 4.min(available_upgrades.len()))
             .cloned()
             .collect()
     }
@@ -178,7 +188,7 @@ pub fn show_level_up_ui(
     // Ставим игру на паузу
     next_state.set(GameState::LevelUpChoice);
 
-    // Получаем 3 случайных апгрейда с учётом разблокированных питомцев
+    // Получаем 4 случайных апгрейда с учётом разблокированных питомцев
     let upgrades = UpgradeType::choose_random_upgrades(&meta);
     let font = ui_fonts.main.clone();
 
@@ -211,8 +221,8 @@ pub fn show_level_up_ui(
             // Контейнер для кнопок
             parent
                 .spawn(Node {
-                    width: Val::Percent(80.0),
-                    height: Val::Px(300.0),
+                    width: Val::Percent(90.0),
+                    height: Val::Px(280.0),
                     align_items: AlignItems::Center,
                     justify_content: JustifyContent::SpaceAround,
                     flex_direction: FlexDirection::Row,
@@ -220,7 +230,7 @@ pub fn show_level_up_ui(
                     ..default()
                 })
                 .with_children(|buttons_parent| {
-                    // Создаем 3 кнопки выбора
+                    // Создаем 4 кнопки выбора
                     for upgrade in upgrades {
                         create_upgrade_button(buttons_parent, upgrade, font.clone());
                     }
@@ -241,7 +251,7 @@ fn create_upgrade_button(
         .spawn((
             Button,
             Node {
-                width: Val::Px(250.0),
+                width: Val::Px(220.0),
                 height: Val::Px(200.0),
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
@@ -293,6 +303,7 @@ pub fn handle_upgrade_button(
             &mut AttackSpeed,
             &mut AttackRange,
             &mut AttackTimer,
+            &mut PetMovementSpeed,
         ),
         With<Pet>,
     >,
@@ -333,6 +344,7 @@ fn apply_upgrade(
             &mut AttackSpeed,
             &mut AttackRange,
             &mut AttackTimer,
+            &mut PetMovementSpeed,
         ),
         With<Pet>,
     >,
@@ -344,21 +356,27 @@ fn apply_upgrade(
         }
         UpgradeType::PetDamageBoost(amount) => {
             upgrade_state.pet_damage_mult *= 1.0 + amount;
-            for (mut damage, _, _, _) in pet_query.iter_mut() {
+            for (mut damage, _, _, _, _) in pet_query.iter_mut() {
                 damage.0 *= 1.0 + amount;
             }
         }
         UpgradeType::PetAttackSpeedBoost(amount) => {
             upgrade_state.pet_attack_speed_mult *= 1.0 + amount;
-            for (_, mut attack_speed, _, mut attack_timer) in pet_query.iter_mut() {
+            for (_, mut attack_speed, _, mut attack_timer, _) in pet_query.iter_mut() {
                 attack_speed.0 *= 1.0 + amount;
                 *attack_timer = AttackTimer::from_attack_speed(attack_speed.0);
             }
         }
         UpgradeType::PetRangeBoost(amount) => {
             upgrade_state.pet_range_bonus += amount;
-            for (_, _, mut range, _) in pet_query.iter_mut() {
+            for (_, _, mut range, _, _) in pet_query.iter_mut() {
                 range.0 += amount;
+            }
+        }
+        UpgradeType::PetMovementSpeedBoost(amount) => {
+            upgrade_state.pet_movement_speed_mult *= 1.0 + amount;
+            for (_, _, _, _, mut movement_speed) in pet_query.iter_mut() {
+                movement_speed.0 *= 1.0 + amount;
             }
         }
         UpgradeType::MaxHpBoost(amount) => {
@@ -395,8 +413,10 @@ fn apply_upgrade(
         UpgradeType::Piercing => {
             upgrade_state.projectile_pierce_bonus += 1;
         }
-        UpgradeType::AreaDamage(radius) => {
-            upgrade_state.area_damage_radius += radius;
+        UpgradeType::AreaDamage(angle_deg) => {
+            upgrade_state.area_damage_cone_angle_deg = (upgrade_state.area_damage_cone_angle_deg
+                + angle_deg)
+                .min(AREA_DAMAGE_CONE_ANGLE_MAX_DEG);
         }
         UpgradeType::GoldDropBoost(amount) => {
             upgrade_state.gold_drop_mult *= 1.0 + amount;

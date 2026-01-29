@@ -89,7 +89,7 @@ pub mod pet_sizes {
 /// Дальность атаки питомцев в пикселях
 pub mod pet_attack_ranges {
     /// Дальность атаки Сторожевого пса
-    pub const GUARD_DOG: f32 = 60.0;
+    pub const GUARD_DOG: f32 = 80.0;
 
     /// Дальность атаки Огненной феи
     pub const FIRE_SPRITE: f32 = 200.0;
@@ -107,7 +107,7 @@ pub mod pet_attack_ranges {
 /// Радиус обнаружения врагов питомцами в пикселях
 pub mod pet_detection_ranges {
     /// Радиус обнаружения Сторожевого пса
-    pub const GUARD_DOG: f32 = 250.0;
+    pub const GUARD_DOG: f32 = 400.0;
 
     /// Радиус обнаружения Огненной феи
     pub const FIRE_SPRITE: f32 = 300.0;
@@ -121,6 +121,9 @@ pub mod pet_detection_ranges {
     /// Радиус обнаружения XP для Пса-собирателя
     pub const XP_COLLECTOR: f32 = 420.0;
 }
+
+/// Допуск для точки сближения питомцев с врагом (пиксели)
+pub const PET_ENGAGE_SLOT_TOLERANCE: f32 = 6.0;
 
 // ========================================
 // ЗОЛОТО
@@ -210,6 +213,12 @@ pub const PLAYER_HITBOX_SCALE: f32 = 0.7;
 /// Коэффициент масштаба хитбокса питомцев (0.7 = хитбокс составляет 70% от размера спрайта)
 pub const PET_HITBOX_SCALE: f32 = 0.3;
 
+/// Множитель дистанции сближения для ближних питомцев (доля от дальности атаки)
+pub const PET_MELEE_ENGAGE_RANGE_MULT: f32 = 0.2;
+
+/// Коэффициент коллизии питомец-враг (меньше = слабее отталкивание)
+pub const PET_ENEMY_COLLISION_SCALE: f32 = 0.3;
+
 /// Мягкое разделение врагов между собой (масштаб только для коллизии, не для хитбоксов)
 pub const ENEMY_SOFT_COLLISION_SCALE: f32 = 1.1;
 
@@ -222,11 +231,11 @@ pub const ROCK_HITBOX_SCALE: f32 = 0.2;
 /// Максимальное количество активных врагов (для стабильного FPS)
 pub const MAX_ACTIVE_ENEMIES: usize = 250;
 
-/// Базовый угол конуса для урона по площади (в радианах)
-pub const AREA_DAMAGE_CONE_ANGLE: f32 = std::f32::consts::FRAC_PI_2;
+/// Максимальный угол конуса для урона по площади (в градусах)
+pub const AREA_DAMAGE_CONE_ANGLE_MAX_DEG: f32 = 280.0;
 
 /// Максимальный угол конуса для урона по площади (в радианах)
-pub const AREA_DAMAGE_CONE_ANGLE_MAX: f32 = std::f32::consts::PI;
+pub const AREA_DAMAGE_CONE_ANGLE_MAX: f32 = AREA_DAMAGE_CONE_ANGLE_MAX_DEG.to_radians();
 
 // ========================================
 // UI
@@ -237,6 +246,24 @@ pub const UI_FONT_SCALE: f32 = 0.9;
 
 /// Длительность отображения текста урона (сек)
 pub const DAMAGE_TEXT_DURATION: f32 = 1.5;
+
+/// Количество секций HP индикатора над врагами
+pub const ENEMY_HP_SEGMENTS: usize = 10;
+
+/// Смещение HP индикатора над врагом (в пикселях)
+pub const ENEMY_HP_INDICATOR_OFFSET: f32 = 14.0;
+
+/// Множитель радиуса кружка HP относительно хитбокса
+pub const ENEMY_HP_INDICATOR_RADIUS_MULT: f32 = 0.6;
+
+/// Множитель размера секций относительно радиуса кружка
+pub const ENEMY_HP_INDICATOR_SEGMENT_SCALE: f32 = 0.22;
+
+/// Минимальный радиус кружка HP
+pub const ENEMY_HP_INDICATOR_MIN_RADIUS: f32 = 8.0;
+
+/// Минимальный радиус секции кружка HP
+pub const ENEMY_HP_INDICATOR_MIN_SEGMENT_RADIUS: f32 = 1.6;
 
 /// Цвета пользовательского интерфейса
 pub mod ui_colors {
@@ -325,7 +352,7 @@ pub mod ui_colors {
 
     /// Светло-фиолетовый текст
     /// Используется: описание игры в главном меню (main_menu.rs)
-    pub const TEXT_PURPLE_LIGHT: Color = Color::srgb(0.9, 0.9, 1.0);
+    pub const TEXT_PURPLE_LIGHT: Color = Color::srgb(1.0, 1.0, 1.0);
 
     /// Светло-серый текст (описания)
     /// Используется: описания улучшений (level_up.rs), описания предметов в магазине (shop.rs),
@@ -429,7 +456,7 @@ pub mod ui_text {
     // ========================================
 
     /// Название игры
-    pub const GAME_TITLE: &str = "MERCHANT'S MENAGERIE";
+    pub const GAME_TITLE: &str = "ROGGY";
 
     /// Подзаголовок игры
     pub const GAME_SUBTITLE: &str = "Bullet Heaven Roguelike";
@@ -465,6 +492,19 @@ pub mod ui_text {
 
     /// Заголовок экрана повышения уровня
     pub const LEVEL_UP_TITLE: &str = "УРОВЕНЬ ПОВЫШЕН!";
+
+    // ========================================
+    // ПАУЗА
+    // ========================================
+
+    /// Заголовок паузы
+    pub const PAUSE_TITLE: &str = "ПАУЗА";
+
+    /// Кнопка "Продолжить"
+    pub const BTN_RESUME: &str = "ПРОДОЛЖИТЬ";
+
+    /// Кнопка "В главное меню"
+    pub const BTN_EXIT_TO_MENU: &str = "В ГЛАВНОЕ МЕНЮ";
 
     // ========================================
     // HUD (ИГРОВОЙ ИНТЕРФЕЙС)
@@ -535,6 +575,20 @@ pub mod ui_text {
         format!("FPS: {:.0}", fps)
     }
 
+    /// Форматирование загрузки CPU
+    pub fn format_cpu_usage(cpu_percent: f32) -> String {
+        format!("CPU: {:.1}%", cpu_percent)
+    }
+
+    /// Форматирование используемых ядер CPU
+    pub fn format_cpu_cores_used(cores_used: f32, cores_total: usize) -> String {
+        if cores_total > 0 {
+            format!("Ядер: {:.1}/{}", cores_used, cores_total)
+        } else {
+            format!("Ядер: {:.1}", cores_used)
+        }
+    }
+
     /// Форматирование памяти
     pub fn format_memory(mb: f32) -> String {
         format!("Память: {:.1} МБ", mb)
@@ -594,6 +648,11 @@ pub mod ui_text {
         format!("Скорость атаки: x{:.2}", mult)
     }
 
+    /// Форматирование множителя скорости передвижения питомцев
+    pub fn format_pet_movement_speed_mult(mult: f32) -> String {
+        format!("Скорость питомцев: x{:.2}", mult)
+    }
+
     /// Форматирование бонуса дальности
     pub fn format_range_bonus(bonus: f32) -> String {
         format!("Дальность: +{:.0}", bonus)
@@ -609,9 +668,9 @@ pub mod ui_text {
         format!("Пробивание: +{}", count)
     }
 
-    /// Форматирование радиуса урона
-    pub fn format_area_damage(radius: f32) -> String {
-        format!("Радиус урона: {:.0}", radius)
+    /// Форматирование угла урона по площади (в градусах)
+    pub fn format_area_damage(angle_deg: f32) -> String {
+        format!("Угол сплеша: {:.0}°", angle_deg)
     }
 
     /// Форматирование множителя золота

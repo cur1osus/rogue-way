@@ -2,8 +2,8 @@ use bevy::prelude::*;
 use rand::seq::SliceRandom;
 
 use crate::components::{
-    AnimationIndices, AnimationTimer, AttackAnimation, DeathAnimation, EffectSprite, Enemy, Pet,
-    PetType, Velocity,
+    AnimationIndices, AnimationTimer, AttackAnimation, AttackRange, AttackTarget, DeathAnimation,
+    EffectSprite, Enemy, Pet, PetType, PhysicsPosition, PreviousPhysicsPosition, Velocity,
 };
 use crate::resources::{EnemySpriteSheet, PetAnimationSheet, PetSpriteSheet};
 
@@ -18,11 +18,15 @@ pub fn enemy_animation_system(
             &mut AnimationIndices,
             &mut AnimationTimer,
             Option<&mut AttackAnimation>,
+            &Velocity,
         ),
         (With<Enemy>, Without<DeathAnimation>),
     >,
 ) {
-    for (entity, mut sprite, mut indices, mut timer, attack_animation) in query.iter_mut() {
+    let move_threshold_sq = 1.0;
+    for (entity, mut sprite, mut indices, mut timer, attack_animation, velocity) in query.iter_mut()
+    {
+        let moving = velocity.0.length_squared() > move_threshold_sq;
         let mut attack_active = false;
         if let Some(mut attack_animation) = attack_animation {
             attack_animation.timer.tick(time.delta());
@@ -35,8 +39,10 @@ pub fn enemy_animation_system(
 
         let sheet = if attack_active {
             &enemy_sprites.attack
-        } else {
+        } else if moving {
             &enemy_sprites.run
+        } else {
+            &enemy_sprites.idle
         };
 
         if sprite.image != sheet.texture {
@@ -72,11 +78,15 @@ pub fn enemy_animation_system(
         }
 
         if timer.just_finished() {
-            atlas.index = if atlas.index == indices.last {
-                indices.first
+            if atlas.index == indices.last {
+                if attack_active {
+                    atlas.index = indices.last;
+                } else {
+                    atlas.index = indices.first;
+                }
             } else {
-                atlas.index + 1
-            };
+                atlas.index += 1;
+            }
         }
     }
 }
@@ -85,21 +95,40 @@ pub fn pet_animation_system(
     time: Res<Time>,
     pet_sprites: Res<PetSpriteSheet>,
     mut commands: Commands,
+    enemy_query: Query<&PhysicsPosition, With<Enemy>>,
     mut query: Query<(
         Entity,
         &Pet,
         &Velocity,
+        &PhysicsPosition,
+        &PreviousPhysicsPosition,
+        Option<&AttackTarget>,
+        Option<&AttackRange>,
         &mut Sprite,
         &mut AnimationIndices,
         &mut AnimationTimer,
         Option<&mut AttackAnimation>,
     )>,
 ) {
-    for (entity, pet, velocity, mut sprite, mut indices, mut timer, attack_animation) in
-        query.iter_mut()
+    let move_threshold_sq = 4.0;
+    let facing_threshold = 0.2;
+    for (
+        entity,
+        pet,
+        velocity,
+        physics_pos,
+        prev_pos,
+        attack_target,
+        attack_range,
+        mut sprite,
+        mut indices,
+        mut timer,
+        attack_animation,
+    ) in query.iter_mut()
     {
+        let delta = physics_pos.0 - prev_pos.0;
+        let moving = delta.length_squared() > move_threshold_sq;
         if pet.pet_type == PetType::XpCollector {
-            let moving = velocity.0.length_squared() > 0.01;
             let idle_options = &pet_sprites.xp_dog_idle;
             if idle_options.is_empty() {
                 continue;
@@ -117,9 +146,16 @@ pub fn pet_animation_system(
 
             apply_pet_sheet(&mut sprite, &mut indices, &mut timer, current_sheet);
 
-            if velocity.0.x < -0.05 {
+            let facing = if delta.length_squared() > move_threshold_sq {
+                delta
+            } else if velocity.0.length_squared() > 1.0 {
+                velocity.0
+            } else {
+                Vec2::ZERO
+            };
+            if facing.x < -facing_threshold {
                 sprite.flip_x = true;
-            } else if velocity.0.x > 0.05 {
+            } else if facing.x > facing_threshold {
                 sprite.flip_x = false;
             }
 
@@ -180,7 +216,6 @@ pub fn pet_animation_system(
             }
         }
 
-        let moving = velocity.0.length_squared() > 0.01;
         let sheet = if attack_active {
             &pet_sprites.guard_dog_attack
         } else if moving {
@@ -189,11 +224,38 @@ pub fn pet_animation_system(
             pet_sprites.get_idle_sheet(&pet.pet_type)
         };
 
-        // Поворачиваем спрайт в направлении движения (flip по X)
-        if velocity.0.x < -0.05 {
-            sprite.flip_x = true;
-        } else if velocity.0.x > 0.05 {
-            sprite.flip_x = false;
+        let mut facing_dir: Option<Vec2> = None;
+        if let Some(attack_target) = attack_target {
+            if let Ok(enemy_pos) = enemy_query.get(attack_target.target_entity) {
+                let to_enemy = enemy_pos.0 - physics_pos.0;
+                let dist_sq = to_enemy.length_squared();
+                let mut use_enemy = attack_active;
+                if let Some(attack_range) = attack_range {
+                    let range = attack_range.0 + 8.0;
+                    if dist_sq <= range * range {
+                        use_enemy = true;
+                    }
+                }
+                if use_enemy && dist_sq > 0.001 {
+                    facing_dir = Some(to_enemy);
+                }
+            }
+        }
+
+        if facing_dir.is_none() {
+            if moving {
+                facing_dir = Some(delta);
+            } else if velocity.0.length_squared() > 1.0 {
+                facing_dir = Some(velocity.0);
+            }
+        }
+
+        if let Some(facing) = facing_dir {
+            if facing.x < -facing_threshold {
+                sprite.flip_x = true;
+            } else if facing.x > facing_threshold {
+                sprite.flip_x = false;
+            }
         }
 
         // Проверяем, изменилась ли текстура

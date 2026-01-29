@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use std::time::Duration;
 
 use crate::components::Team;
 
@@ -18,6 +19,81 @@ pub enum PetType {
     SlimeCompanion, // Damage 15, Speed 0.5/sec, Range 100, замедляет врагов
     CrowScout,      // Damage 8, Speed 1.5/sec, Range 250, летает над препятствиями
     XpCollector,    // Собирает XP гемы, не атакует
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PetRole {
+    Melee,
+    Ranged,
+    Support,
+    Collector,
+}
+
+impl PetRole {
+    pub fn decision_interval(&self) -> f32 {
+        match self {
+            PetRole::Melee => 0.14,
+            PetRole::Ranged => 0.16,
+            PetRole::Support => 0.18,
+            PetRole::Collector => 0.25,
+        }
+    }
+
+    pub fn action_hold_time(&self) -> f32 {
+        match self {
+            PetRole::Melee => 0.35,
+            PetRole::Ranged => 0.4,
+            PetRole::Support => 0.45,
+            PetRole::Collector => 0.3,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PetState {
+    Follow,
+    Engage,
+    Regroup,
+    Retreat,
+    Assist,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PetAction {
+    FollowFormation,
+    Regroup,
+    EngageTarget,
+    PeelThreat,
+    KeepRange,
+    Fallback,
+    HoldPosition,
+    CollectXp,
+}
+
+#[derive(Component, Debug)]
+pub struct PetBlackboard {
+    pub state: PetState,
+    pub action: PetAction,
+    pub target: Option<Entity>,
+    pub decision_timer: Timer,
+    pub action_lock: Timer,
+}
+
+impl PetBlackboard {
+    pub fn new(role: PetRole) -> Self {
+        let decision_interval = role.decision_interval();
+        let mut decision_timer = Timer::from_seconds(decision_interval, TimerMode::Repeating);
+        decision_timer.tick(Duration::from_secs_f32(decision_interval));
+        let mut action_lock = Timer::from_seconds(0.0, TimerMode::Once);
+        action_lock.tick(Duration::from_secs_f32(0.0));
+        Self {
+            state: PetState::Follow,
+            action: PetAction::FollowFormation,
+            target: None,
+            decision_timer,
+            action_lock,
+        }
+    }
 }
 
 impl PetType {
@@ -43,6 +119,16 @@ impl PetType {
         }
     }
 
+    pub fn get_role(&self) -> PetRole {
+        match self {
+            PetType::GuardDog => PetRole::Melee,
+            PetType::SlimeCompanion => PetRole::Melee,
+            PetType::FireSprite => PetRole::Ranged,
+            PetType::CrowScout => PetRole::Ranged,
+            PetType::XpCollector => PetRole::Collector,
+        }
+    }
+
     /// Получить строковый ID питомца для системы разблокировки
     pub fn to_string(&self) -> String {
         match self {
@@ -63,7 +149,7 @@ impl PetType {
                 1.2,
                 pet_attack_ranges::GUARD_DOG,
                 pet_detection_ranges::GUARD_DOG,
-                200.0,
+                250.0,
             ),
             PetType::FireSprite => (
                 5.0,
@@ -165,7 +251,7 @@ pub struct PendingAttack {
     pub target: Entity,
     pub damage: f32,
     pub timer: Timer,
-    pub area_radius: f32,
+    pub area_cone_angle_deg: f32,
     pub attack_range: f32,
     pub team: Team,
     pub hit_particles: u32,

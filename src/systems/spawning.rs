@@ -3,8 +3,8 @@ use bevy::window::PrimaryWindow;
 
 use crate::components::{
     AnimationIndices, AnimationTimer, AttackRange, AttackTimer, Boss, BossType, CollisionLayer,
-    Damage, Enemy, EnemyType, Health, Hitbox, MovementSpeed, PhysicsPosition, Player,
-    PreviousPhysicsPosition, Target, Team, Velocity,
+    Damage, Enemy, EnemyBlackboard, EnemyState, EnemyType, Health, Hitbox, MovementSpeed,
+    PhysicsPosition, Player, PreviousPhysicsPosition, Target, Team, Velocity,
 };
 use crate::constants::{ENEMY_HITBOX_SCALE, MAX_ACTIVE_ENEMIES};
 use crate::resources::{EnemySpriteSheet, WaveConfig};
@@ -147,40 +147,48 @@ fn spawn_boss(
     let size = boss_type.get_size();
     let scale = size / enemy_sprites.run.frame_size.y;
     let hitbox_size = Vec2::splat(size * ENEMY_HITBOX_SCALE);
+    let ai_profile = boss_type.get_ai_profile();
 
     commands
         .spawn((
             Sprite {
-                image: enemy_sprites.run.texture.clone(),
+                image: enemy_sprites.idle.texture.clone(),
                 texture_atlas: Some(TextureAtlas {
-                    layout: enemy_sprites.run.layout.clone(),
-                    index: enemy_sprites.run.first,
+                    layout: enemy_sprites.idle.layout.clone(),
+                    index: enemy_sprites.idle.first,
                 }),
                 ..default()
             },
             Transform::from_xyz(spawn_pos.x, spawn_pos.y, 1.0).with_scale(Vec3::splat(scale)),
         ))
-        .insert((
-            Boss { boss_type },
-            Enemy {
-                enemy_type: EnemyType::Bandit,
-            }, // Базовое поведение
-            Hitbox::from_full_size(hitbox_size),
-            CollisionLayer::enemy(),
-            Health::new(hp),
-            MovementSpeed(speed),
-            Velocity::default(),
-            Damage(damage),
-            AttackRange(attack_range),
-            AttackTimer::from_attack_speed(attack_speed),
-            Team(Team::ENEMY),
-            Target(player_entity),
-            AnimationIndices {
-                first: enemy_sprites.run.first,
-                last: enemy_sprites.run.last,
-            },
-            AnimationTimer(Timer::from_seconds(0.12, TimerMode::Repeating)),
-        ));
+        .insert(Boss { boss_type })
+        .insert(Enemy {
+            enemy_type: EnemyType::Bandit,
+        })
+        .insert(EnemyState::Idle)
+        .insert(ai_profile.perception)
+        .insert(ai_profile.config)
+        .insert(EnemyBlackboard::new(&ai_profile.config))
+        .insert(Hitbox::from_full_size(hitbox_size))
+        .insert(CollisionLayer::enemy())
+        .insert(Health::new(hp))
+        .insert(MovementSpeed(speed))
+        .insert(Velocity::default())
+        .insert(Damage(damage))
+        .insert(AttackRange(attack_range))
+        .insert(AttackTimer::from_attack_speed(attack_speed))
+        .insert(Team(Team::ENEMY))
+        .insert(Target(player_entity))
+        .insert(AnimationIndices {
+            first: enemy_sprites.idle.first,
+            last: enemy_sprites.idle.last,
+        })
+        .insert(AnimationTimer(Timer::from_seconds(
+            0.12,
+            TimerMode::Repeating,
+        )))
+        .insert(PhysicsPosition(spawn_pos))
+        .insert(PreviousPhysicsPosition(spawn_pos));
 }
 
 /// Выбирает тип врага на основе времени игры
@@ -240,39 +248,45 @@ fn spawn_enemy(
     let size = enemy_type.get_size();
     let scale = size / enemy_sprites.run.frame_size.y;
     let hitbox_size = Vec2::splat(size * ENEMY_HITBOX_SCALE);
+    let ai_profile = enemy_type.get_ai_profile();
 
     commands
         .spawn((
             Sprite {
-                image: enemy_sprites.run.texture.clone(),
+                image: enemy_sprites.idle.texture.clone(),
                 texture_atlas: Some(TextureAtlas {
-                    layout: enemy_sprites.run.layout.clone(),
-                    index: enemy_sprites.run.first,
+                    layout: enemy_sprites.idle.layout.clone(),
+                    index: enemy_sprites.idle.first,
                 }),
                 ..default()
             },
             Transform::from_xyz(spawn_pos.x, spawn_pos.y, 1.0).with_scale(Vec3::splat(scale)),
         ))
-        .insert((
-            Enemy { enemy_type },
-            Hitbox::from_full_size(hitbox_size),
-            CollisionLayer::enemy(),
-            Health::new(base_hp * difficulty_multiplier),
-            MovementSpeed(speed),
-            Velocity::default(),
-            Damage(base_damage * difficulty_multiplier),
-            AttackRange(attack_range),
-            AttackTimer::from_attack_speed(attack_speed),
-            Team(Team::ENEMY),
-            Target(player_entity),
-            AnimationIndices {
-                first: enemy_sprites.run.first,
-                last: enemy_sprites.run.last,
-            },
-            AnimationTimer(Timer::from_seconds(0.12, TimerMode::Repeating)),
-            PhysicsPosition(spawn_pos),
-            PreviousPhysicsPosition(spawn_pos),
-        ));
+        .insert(Enemy { enemy_type })
+        .insert(EnemyState::Idle)
+        .insert(ai_profile.perception)
+        .insert(ai_profile.config)
+        .insert(EnemyBlackboard::new(&ai_profile.config))
+        .insert(Hitbox::from_full_size(hitbox_size))
+        .insert(CollisionLayer::enemy())
+        .insert(Health::new(base_hp * difficulty_multiplier))
+        .insert(MovementSpeed(speed))
+        .insert(Velocity::default())
+        .insert(Damage(base_damage * difficulty_multiplier))
+        .insert(AttackRange(attack_range))
+        .insert(AttackTimer::from_attack_speed(attack_speed))
+        .insert(Team(Team::ENEMY))
+        .insert(Target(player_entity))
+        .insert(AnimationIndices {
+            first: enemy_sprites.idle.first,
+            last: enemy_sprites.idle.last,
+        })
+        .insert(AnimationTimer(Timer::from_seconds(
+            0.12,
+            TimerMode::Repeating,
+        )))
+        .insert(PhysicsPosition(spawn_pos))
+        .insert(PreviousPhysicsPosition(spawn_pos));
 }
 
 /// Вычисляет позицию спавна за пределами экрана

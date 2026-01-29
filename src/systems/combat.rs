@@ -1,18 +1,20 @@
 use crate::components::{
-    AttackAnimation, AttackRange, AttackTimer, Boss, Damage, DeathAnimation, Enemy, FloatingText,
-    Gold, GoldHighlightTimer, GoldPickup, Health, HitFlash, Hitbox, MovementSpeed, PendingAttack,
-    Pet, PetType, Player, SlowEffect, Target, Team, Velocity, XpGem,
+    AnimationTimer, AttackAnimation, AttackRange, AttackTimer, Boss, Damage, DeathAnimation, Enemy,
+    EnemyAIConfig, EnemyAction, EnemyBlackboard, FloatingText, Gold, GoldHighlightTimer,
+    GoldPickup, Health, HitFlash, Hitbox, MovementSpeed, PendingAttack, Pet, PetType, Player,
+    SlowEffect, Target, Team, Velocity, XpGem,
 };
 use crate::constants::{
-    AREA_DAMAGE_CONE_ANGLE, AREA_DAMAGE_CONE_ANGLE_MAX, DAMAGE_TEXT_DURATION, GOLD_SCALE,
-    UI_FONT_SCALE, XP_GEM_SCALE,
+    AREA_DAMAGE_CONE_ANGLE_MAX, DAMAGE_TEXT_DURATION, GOLD_SCALE, PET_HITBOX_SCALE, UI_FONT_SCALE,
+    XP_GEM_SCALE,
 };
 use crate::resources::{
     GoldSprites, MetaProgression, PetSpriteSheet, PlayerDamageFlash, ScreenShake, UiFonts,
-    UpgradeState, XpGemSprites,
+    UpgradeState, WaveConfig, XpGemSprites,
 };
 use crate::systems::{
-    is_within_cone, spawn_area_damage_visual, spawn_hit_particles, spawn_slime_heal_effect,
+    is_within_cone, pet_engage_range, spawn_area_damage_visual, spawn_hit_particles,
+    spawn_slime_heal_effect,
 };
 use crate::ui::{AreaDamageVisualAssets, HitboxVisualsVisible};
 use bevy::prelude::*;
@@ -38,6 +40,7 @@ pub fn collision_system(
     mut pet_query: Query<(
         Entity,
         &Transform,
+        &AnimationTimer,
         &Damage,
         &AttackRange,
         &mut AttackTimer,
@@ -45,12 +48,17 @@ pub fn collision_system(
         &Pet,
         Option<&PendingAttack>,
     )>,
-    enemy_query: Query<(Entity, &Transform, &Team), (With<Enemy>, Without<DeathAnimation>)>,
+    enemy_query: Query<
+        (Entity, &Transform, &Team, &Hitbox),
+        (With<Enemy>, Without<DeathAnimation>),
+    >,
     upgrade_state: Res<UpgradeState>,
+    pet_sprites: Res<PetSpriteSheet>,
 ) {
     for (
         pet_entity,
         pet_transform,
+        animation_timer,
         damage,
         attack_range,
         mut attack_timer,
@@ -72,52 +80,55 @@ pub fn collision_system(
             continue;
         }
 
-        // Ищем ближайшего врага в радиусе атаки
-        let mut closest_enemy: Option<(Entity, Vec2, f32)> = None;
+        let pet_radius = pet.pet_type.get_size() * PET_HITBOX_SCALE * 0.5;
+        let pet_pos = pet_transform.translation.truncate();
 
-        for (enemy_entity, enemy_transform, enemy_team) in enemy_query.iter() {
+        // Ищем ближайшего врага в радиусе атаки
+        let mut closest_enemy: Option<(Entity, f32)> = None;
+
+        for (enemy_entity, enemy_transform, enemy_team, hitbox) in enemy_query.iter() {
             // Проверяем, что это враждебная команда
             if pet_team.0 == enemy_team.0 {
                 continue;
             }
 
-            // Вычисляем расстояние
-            let distance = pet_transform
-                .translation
-                .distance(enemy_transform.translation);
+            let enemy_pos = enemy_transform.translation.truncate();
+            let distance_sq = pet_pos.distance_squared(enemy_pos);
 
-            if distance <= attack_range.0 {
-                if let Some((_, _, closest_dist)) = closest_enemy {
-                    if distance < closest_dist {
-                        closest_enemy = Some((
-                            enemy_entity,
-                            enemy_transform.translation.truncate(),
-                            distance,
-                        ));
+            let enemy_radius = hitbox.half_size.x.max(hitbox.half_size.y);
+            let effective_range = pet_engage_range(attack_range.0, pet_radius, enemy_radius);
+            let effective_range_sq = effective_range * effective_range;
+            if distance_sq <= effective_range_sq {
+                if let Some((_, closest_dist_sq)) = closest_enemy {
+                    if distance_sq < closest_dist_sq {
+                        closest_enemy = Some((enemy_entity, distance_sq));
                     }
                 } else {
-                    closest_enemy = Some((
-                        enemy_entity,
-                        enemy_transform.translation.truncate(),
-                        distance,
-                    ));
+                    closest_enemy = Some((enemy_entity, distance_sq));
                 }
             }
         }
 
         // Если нашли врага - атакуем
-        if let Some((enemy_entity, _enemy_pos, _)) = closest_enemy {
+        if let Some((enemy_entity, _)) = closest_enemy {
             let attack_duration = attack_timer.timer.duration().as_secs_f32();
+            let mut windup_duration = attack_duration;
             if pet.pet_type == PetType::GuardDog {
+                let frames = (pet_sprites.guard_dog_attack.last
+                    - pet_sprites.guard_dog_attack.first
+                    + 1) as f32;
+                let frame_time = animation_timer.0.duration().as_secs_f32();
+                let anim_duration = (frame_time * frames).min(attack_duration);
+                windup_duration = anim_duration;
                 commands
                     .entity(pet_entity)
-                    .insert(AttackAnimation::new(attack_duration));
+                    .insert(AttackAnimation::new(anim_duration));
             }
             commands.entity(pet_entity).insert(PendingAttack {
                 target: enemy_entity,
                 damage: damage.0,
-                timer: Timer::from_seconds(attack_duration, TimerMode::Once),
-                area_radius: upgrade_state.area_damage_radius,
+                timer: Timer::from_seconds(windup_duration, TimerMode::Once),
+                area_cone_angle_deg: upgrade_state.area_damage_cone_angle_deg,
                 attack_range: attack_range.0,
                 team: *pet_team,
                 hit_particles: 5,
@@ -137,7 +148,7 @@ pub fn collision_system(
 pub fn enemy_attack_system(
     mut commands: Commands,
     player_query: Query<(Entity, &Transform), With<Player>>,
-    enemy_query: Query<
+    mut enemy_query: Query<
         (
             Entity,
             &Transform,
@@ -147,6 +158,8 @@ pub fn enemy_attack_system(
             &Team,
             Option<&Boss>,
             Option<&PendingAttack>,
+            &EnemyAIConfig,
+            &mut EnemyBlackboard,
         ),
         (With<Enemy>, Without<DeathAnimation>),
     >,
@@ -164,7 +177,9 @@ pub fn enemy_attack_system(
         team,
         boss_opt,
         pending_attack,
-    ) in enemy_query.iter()
+        ai_config,
+        mut memory,
+    ) in enemy_query.iter_mut()
     {
         if pending_attack.is_some() {
             continue;
@@ -173,25 +188,44 @@ pub fn enemy_attack_system(
             continue;
         }
 
-        let distance = enemy_transform
+        let distance_sq = enemy_transform
             .translation
-            .distance(player_transform.translation);
-        if distance <= attack_range.0 {
-            let attack_duration = attack_timer.timer.duration().as_secs_f32();
+            .distance_squared(player_transform.translation);
+        let mut effective_range = attack_range.0;
+        let mut attack_damage = damage.0;
+        let mut attack_duration = attack_timer.timer.duration().as_secs_f32();
+        let mut heavy_attack = false;
+
+        if memory.current_action == EnemyAction::HeavyAttack
+            && memory.heavy_cooldown.is_finished()
+            && ai_config.heavy_attack_weight > 0.0
+        {
+            heavy_attack = true;
+            effective_range *= ai_config.heavy_attack_range_mult;
+            attack_damage *= ai_config.heavy_attack_damage_mult;
+            attack_duration *= ai_config.heavy_attack_windup_mult;
+        }
+
+        let effective_range_sq = effective_range * effective_range;
+        if distance_sq <= effective_range_sq {
             commands
                 .entity(enemy_entity)
                 .insert(AttackAnimation::new(attack_duration));
             let screen_shake = if boss_opt.is_some() {
-                Some((12.0, 0.25))
+                if heavy_attack {
+                    Some((18.0, 0.35))
+                } else {
+                    Some((12.0, 0.25))
+                }
             } else {
                 None
             };
             commands.entity(enemy_entity).insert(PendingAttack {
                 target: player_entity,
-                damage: damage.0,
+                damage: attack_damage,
                 timer: Timer::from_seconds(attack_duration, TimerMode::Once),
-                area_radius: 0.0,
-                attack_range: attack_range.0,
+                area_cone_angle_deg: 0.0,
+                attack_range: effective_range,
                 team: *team,
                 hit_particles: 0,
                 hit_color: Color::WHITE,
@@ -199,6 +233,9 @@ pub fn enemy_attack_system(
                 slime_heal_effect: false,
                 screen_shake,
             });
+            if heavy_attack {
+                memory.heavy_cooldown.reset();
+            }
         }
     }
 }
@@ -211,7 +248,6 @@ pub fn pending_attack_system(
     mut damage_events: MessageWriter<DamageEvent>,
     transform_query: Query<&Transform>,
     enemy_query: Query<(Entity, &Transform, &Team), With<Enemy>>,
-    pet_query: Query<&Pet>,
     mut screen_shake: ResMut<ScreenShake>,
     pet_sprites: Res<PetSpriteSheet>,
     hitbox_visuals: Res<HitboxVisualsVisible>,
@@ -231,10 +267,11 @@ pub fn pending_attack_system(
             commands.entity(attacker_entity).remove::<PendingAttack>();
             continue;
         };
-        let distance = attacker_transform
+        let distance_sq = attacker_transform
             .translation
-            .distance(target_transform.translation);
-        if distance > pending.attack_range {
+            .distance_squared(target_transform.translation);
+        let range_sq = pending.attack_range * pending.attack_range;
+        if distance_sq > range_sq {
             commands.entity(attacker_entity).remove::<PendingAttack>();
             continue;
         }
@@ -261,27 +298,13 @@ pub fn pending_attack_system(
             spawn_slime_heal_effect(&mut commands, target_pos, &pet_sprites);
         }
 
-        if pending.area_radius > 0.0 {
-            let base_attack_range = pet_query
-                .get(attacker_entity)
-                .map(|pet| {
-                    let (_, _, range, _, _) = pet.pet_type.get_stats();
-                    range
-                })
-                .unwrap_or(pending.attack_range);
-            let scale = if base_attack_range > 0.0 {
-                pending.attack_range / base_attack_range
-            } else {
-                1.0
-            };
-            let scaled_area = pending.area_radius * scale;
-            let cone_length = scaled_area.min(pending.attack_range);
-            let cone_angle = if base_attack_range > 0.0 {
-                (AREA_DAMAGE_CONE_ANGLE * (1.0 + (pending.area_radius / base_attack_range)))
-                    .min(AREA_DAMAGE_CONE_ANGLE_MAX)
-            } else {
-                AREA_DAMAGE_CONE_ANGLE
-            };
+        if pending.area_cone_angle_deg > 0.0 {
+            let cone_angle = pending
+                .area_cone_angle_deg
+                .to_radians()
+                .min(AREA_DAMAGE_CONE_ANGLE_MAX);
+            let cone_length = pending.attack_range.max(0.0);
+            let cone_length_sq = cone_length * cone_length;
             if hitbox_visuals.0 {
                 spawn_area_damage_visual(
                     &mut commands,
@@ -298,8 +321,8 @@ pub fn pending_attack_system(
                     continue;
                 }
                 let splash_offset = splash_transform.translation.truncate() - attacker_pos;
-                let splash_distance = splash_offset.length();
-                if splash_distance <= cone_length
+                let splash_distance_sq = splash_offset.length_squared();
+                if splash_distance_sq <= cone_length_sq
                     && is_within_cone(attack_direction, splash_offset, cone_angle)
                 {
                     damage_events.write(DamageEvent {
@@ -340,6 +363,7 @@ pub fn damage_system(
     upgrade_state: Res<UpgradeState>,
     ui_fonts: Res<UiFonts>,
     mut meta: ResMut<MetaProgression>,
+    wave_config: Res<WaveConfig>,
     gold_sprites: Res<GoldSprites>,
     xp_gem_sprites: Res<XpGemSprites>,
     mut player_damage_flash: ResMut<PlayerDamageFlash>,
@@ -502,6 +526,11 @@ pub fn damage_system(
                     let Ok((_player_entity, player_gold)) = player_query.get(event.target) else {
                         continue;
                     };
+
+                    let run_time = wave_config.game_time as u32;
+                    if run_time > meta.save_data.best_time {
+                        meta.save_data.best_time = run_time;
+                    }
 
                     // Сохраняем золото в метапрогрессию (§3.2.3)
                     meta.save_data.add_gold(player_gold.amount);

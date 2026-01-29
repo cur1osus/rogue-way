@@ -77,6 +77,46 @@ pub fn terrain_chunk_system(
     }
 }
 
+pub fn spawn_menu_terrain(
+    parent: &mut ChildSpawnerCommands,
+    window_size: Vec2,
+    terrain_sprites: &TerrainSprites,
+    config: &TerrainConfig,
+) {
+    let tile_size = config.tile_size;
+    let padding = tile_size * 2.0;
+    let half_width = window_size.x / 2.0 + padding;
+    let half_height = window_size.y / 2.0 + padding;
+
+    let min_tile_x = ((-half_width) / tile_size).floor() as i32;
+    let max_tile_x = (half_width / tile_size).ceil() as i32;
+    let min_tile_y = ((-half_height) / tile_size).floor() as i32;
+    let max_tile_y = (half_height / tile_size).ceil() as i32;
+
+    let chunk_origin = Vec3::ZERO;
+
+    for tile_x in min_tile_x..=max_tile_x {
+        for tile_y in min_tile_y..=max_tile_y {
+            let position = Vec3::new(
+                (tile_x as f32 + 0.5) * tile_size,
+                (tile_y as f32 + 0.5) * tile_size,
+                0.0,
+            );
+
+            spawn_ground_tile(parent, position, terrain_sprites, config, tile_x, tile_y);
+            spawn_land_decorations(
+                parent,
+                position,
+                terrain_sprites,
+                config,
+                tile_x,
+                tile_y,
+                chunk_origin,
+            );
+        }
+    }
+}
+
 fn spawn_chunk(
     commands: &mut Commands,
     chunk_coords: IVec2,

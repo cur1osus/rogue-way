@@ -1,8 +1,12 @@
 use crate::constants::{ui_colors, ui_text, UI_FONT_SCALE};
-use crate::resources::UiFonts;
+use crate::resources::{TerrainConfig, TerrainSprites, UiFonts};
+use crate::systems::spawn_menu_terrain;
 use crate::ui::GameState;
 use bevy::app::AppExit;
+use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::prelude::*;
+use bevy::window::{PrimaryWindow, WindowResized};
+use rand::Rng;
 
 /// Маркер для UI главного меню
 #[derive(Component)]
@@ -11,6 +15,14 @@ pub struct MainMenuUI;
 /// Маркер для спрайтов меню (для очистки)
 #[derive(Component)]
 pub struct MenuSprite;
+
+/// Маркер для фона меню
+#[derive(Component)]
+pub struct MenuBackground;
+
+/// Маркер для корня террейна меню
+#[derive(Component)]
+pub struct MenuTerrainRoot;
 
 /// Маркер для кнопки "Играть"
 #[derive(Component)]
@@ -31,14 +43,40 @@ pub struct FloatingAnimation {
     pub amplitude: f32,
 }
 
+const MENU_BACKDROP_Z: f32 = -1.0;
+const MENU_TEXT_Z: f32 = 0.2;
+const MENU_TEXT_SPACING: i32 = 1;
+const ROCK_BASE_SIZE: f32 = 64.0;
+
+const LETTER_R: [&str; 7] = [
+    "####.", "#...#", "#...#", "####.", "#.#..", "#..#.", "#...#",
+];
+const LETTER_O: [&str; 7] = [
+    ".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###.",
+];
+const LETTER_G: [&str; 7] = [
+    ".###.", "#...#", "#....", "#.###", "#...#", "#...#", ".###.",
+];
+const LETTER_Y: [&str; 7] = [
+    "#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#..",
+];
+const ROGGY_LETTERS: [&[&str; 7]; 5] = [&LETTER_R, &LETTER_O, &LETTER_G, &LETTER_G, &LETTER_Y];
+
 /// Настройка UI главного меню
 pub fn setup_main_menu(
     mut commands: Commands,
     ui_fonts: Res<UiFonts>,
     asset_server: Res<AssetServer>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    terrain_sprites: Res<TerrainSprites>,
+    terrain_config: Res<TerrainConfig>,
     mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
 ) {
     let font = ui_fonts.main.clone();
+    let window_size = match windows.single() {
+        Ok(window) => window.size(),
+        Err(_) => Vec2::new(1280.0, 720.0),
+    };
 
     // Создаем TextureAtlasLayout для спрайтов персонажей
     // Warrior (Guard Dog) - 8 кадров 192x192
@@ -64,12 +102,20 @@ pub fn setup_main_menu(
     let lancer_layout = TextureAtlasLayout::from_grid(UVec2::new(320, 320), 12, 1, None, None);
     let lancer_layout_handle = texture_atlas_layouts.add(lancer_layout);
 
-    // Фоновый градиент
+    // Базовый фон
     commands.spawn((
-        Sprite::from_color(ui_colors::MENU_BACKGROUND, Vec2::new(1920.0, 1080.0)),
-        Transform::from_xyz(0.0, 0.0, -10.0),
+        Sprite::from_color(ui_colors::MENU_BACKGROUND, window_size),
+        Transform::from_xyz(0.0, 0.0, MENU_BACKDROP_Z),
+        MenuBackground,
         MenuSprite,
     ));
+
+    spawn_menu_terrain_root(
+        &mut commands,
+        window_size,
+        &terrain_sprites,
+        &terrain_config,
+    );
 
     // Фоновый замок
     commands.spawn((
@@ -78,7 +124,7 @@ pub fn setup_main_menu(
             color: ui_colors::MENU_ACCENT,
             ..default()
         },
-        Transform::from_xyz(0.0, -150.0, -5.0).with_scale(Vec3::splat(1.5)),
+        Transform::from_xyz(0.0, -150.0, 0.12).with_scale(Vec3::splat(1.5)),
         MenuSprite,
     ));
 
@@ -230,6 +276,10 @@ pub fn setup_main_menu(
                     flex_direction: FlexDirection::Column,
                     align_items: AlignItems::Center,
                     row_gap: Val::Px(20.0),
+                    position_type: PositionType::Absolute,
+                    width: Val::Percent(100.0),
+                    bottom: Val::Px(180.0),
+                    left: Val::Px(0.0),
                     ..default()
                 })
                 .with_children(|button_container| {
@@ -307,6 +357,116 @@ pub fn setup_main_menu(
                     ));
                 });
         });
+}
+
+fn spawn_menu_terrain_root(
+    commands: &mut Commands,
+    window_size: Vec2,
+    terrain_sprites: &TerrainSprites,
+    terrain_config: &TerrainConfig,
+) -> Entity {
+    let terrain_root = commands
+        .spawn((
+            Transform::default(),
+            GlobalTransform::default(),
+            MenuTerrainRoot,
+            MenuSprite,
+        ))
+        .id();
+    let mut menu_terrain_config = terrain_config.clone();
+    menu_terrain_config.seed = rand::thread_rng().gen();
+    commands.entity(terrain_root).with_children(|parent| {
+        spawn_menu_terrain(parent, window_size, terrain_sprites, &menu_terrain_config);
+        spawn_roggy_rock_text(parent, Vec2::ZERO, window_size, terrain_sprites);
+    });
+    terrain_root
+}
+
+pub fn menu_resize_system(
+    mut commands: Commands,
+    mut resize_events: MessageReader<WindowResized>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    terrain_sprites: Res<TerrainSprites>,
+    terrain_config: Res<TerrainConfig>,
+    mut background_query: Query<&mut Sprite, With<MenuBackground>>,
+    terrain_root_query: Query<Entity, With<MenuTerrainRoot>>,
+) {
+    if resize_events.is_empty() {
+        return;
+    }
+    resize_events.clear();
+
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let window_size = window.size();
+
+    for mut sprite in background_query.iter_mut() {
+        sprite.custom_size = Some(window_size);
+    }
+
+    for entity in terrain_root_query.iter() {
+        commands.entity(entity).despawn_children();
+        commands.entity(entity).despawn();
+    }
+    spawn_menu_terrain_root(
+        &mut commands,
+        window_size,
+        &terrain_sprites,
+        &terrain_config,
+    );
+}
+
+fn spawn_roggy_rock_text(
+    parent: &mut ChildSpawnerCommands,
+    center: Vec2,
+    window_size: Vec2,
+    terrain_sprites: &TerrainSprites,
+) {
+    if terrain_sprites.rocks.is_empty() {
+        return;
+    }
+
+    let mut rng = rand::thread_rng();
+    let letter_width = ROGGY_LETTERS[0][0].len() as i32;
+    let letter_height = ROGGY_LETTERS[0].len() as i32;
+    let letter_count = ROGGY_LETTERS.len() as i32;
+    let total_columns = letter_width * letter_count + (letter_count - 1) * MENU_TEXT_SPACING;
+    let total_rows = letter_height;
+    let max_width = window_size.x * 0.8;
+    let max_height = window_size.y * 0.3;
+    let cell_size = (max_width / total_columns as f32)
+        .min(max_height / total_rows as f32)
+        .clamp(28.0, 64.0);
+    let total_width = total_columns as f32 * cell_size;
+    let total_height = total_rows as f32 * cell_size;
+    let rock_scale = (cell_size / ROCK_BASE_SIZE) * 1.15;
+    let text_tint = Color::srgb(0.92, 0.95, 1.0);
+
+    for (letter_index, letter) in ROGGY_LETTERS.iter().enumerate() {
+        for (row_index, row) in letter.iter().enumerate() {
+            for (col_index, glyph) in row.chars().enumerate() {
+                if glyph != '#' {
+                    continue;
+                }
+
+                let grid_x =
+                    letter_index as i32 * (letter_width + MENU_TEXT_SPACING) + col_index as i32;
+                let grid_y = row_index as i32;
+                let x = center.x - total_width / 2.0 + (grid_x as f32 + 0.5) * cell_size;
+                let y = center.y + total_height / 2.0 - (grid_y as f32 + 0.5) * cell_size;
+                let rock_index = rng.gen_range(0..terrain_sprites.rocks.len());
+                parent.spawn((
+                    Sprite {
+                        image: terrain_sprites.rocks[rock_index].clone(),
+                        color: text_tint,
+                        ..default()
+                    },
+                    Transform::from_xyz(x, y, MENU_TEXT_Z).with_scale(Vec3::splat(rock_scale)),
+                ));
+            }
+        }
+    }
 }
 
 /// Сброс камеры для корректного центрирования меню

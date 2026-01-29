@@ -11,6 +11,7 @@ pub struct EnemyAnimationSheet {
 
 #[derive(Resource, Clone)]
 pub struct EnemySpriteSheet {
+    pub idle: EnemyAnimationSheet,
     pub run: EnemyAnimationSheet,
     pub attack: EnemyAnimationSheet,
     pub death: EnemyAnimationSheet,
@@ -21,6 +22,13 @@ impl FromWorld for EnemySpriteSheet {
         world.resource_scope(|world, asset_server: Mut<AssetServer>| {
             let mut texture_atlas_layouts = world.resource_mut::<Assets<TextureAtlasLayout>>();
             Self {
+                idle: build_enemy_sheet(
+                    &asset_server,
+                    &mut texture_atlas_layouts,
+                    "sprites/mushroom-idle.png",
+                    Vec2::new(80.0, 34.0),
+                    7,
+                ),
                 run: build_enemy_sheet(
                     &asset_server,
                     &mut texture_atlas_layouts,

@@ -1,4 +1,8 @@
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
+use bevy::window::{MonitorSelection, WindowMode};
+use bevy::winit::WinitWindows;
+use winit::window::Icon;
 
 mod components;
 mod constants;
@@ -17,8 +21,9 @@ fn main() {
                 .set(ImagePlugin::default_nearest())
                 .set(WindowPlugin {
                     primary_window: Some(Window {
-                        title: "Merchant's Menagerie".to_string(),
+                        title: "Roggy".to_string(),
                         resolution: (1280, 720).into(),
+                        mode: WindowMode::BorderlessFullscreen(MonitorSelection::Primary),
                         ..default()
                     }),
                     ..default()
@@ -49,6 +54,7 @@ fn main() {
         .init_resource::<AttackRangeVisualAssets>()
         .init_resource::<HitboxVisualAssets>()
         .init_resource::<AreaDamageVisualAssets>()
+        .init_resource::<EnemyHpIndicatorAssets>()
         .init_resource::<HitboxVisualsVisible>()
         .init_resource::<TerrainSprites>()
         .init_resource::<TerrainConfig>()
@@ -67,10 +73,23 @@ fn main() {
                 handle_main_menu_buttons,
                 menu_floating_animation_system,
                 menu_button_hover_system,
+                menu_resize_system,
             )
                 .run_if(in_state(GameState::MainMenu)),
         )
         .add_systems(OnExit(GameState::MainMenu), cleanup_main_menu)
+        // Системы паузы
+        .add_systems(OnEnter(GameState::Paused), setup_pause_menu)
+        .add_systems(
+            Update,
+            (
+                handle_pause_menu_buttons,
+                pause_menu_button_hover_system,
+                resume_on_escape_system,
+            )
+                .run_if(in_state(GameState::Paused)),
+        )
+        .add_systems(OnExit(GameState::Paused), cleanup_pause_menu)
         // Системы для магазина
         .add_systems(OnEnter(GameState::Shop), setup_shop_ui)
         .add_systems(
@@ -126,6 +145,10 @@ fn main() {
         )
         .add_systems(
             Update,
+            pause_on_escape_system.run_if(in_state(GameState::Playing)),
+        )
+        .add_systems(
+            Update,
             (
                 spawn_system,
                 attack_timer_tick_system,
@@ -174,6 +197,7 @@ fn main() {
                 boss_health_bar_system,
                 update_boss_health_bar_system,
                 auto_save_system,
+                set_window_icon,
             ),
         )
         // Системы панели статов (работают только в Playing)
@@ -204,10 +228,59 @@ fn main() {
             (spawn_hitbox_visuals_system, update_hitbox_visuals_system)
                 .run_if(in_state(GameState::Playing)),
         )
+        .add_systems(
+            Update,
+            (
+                spawn_enemy_hp_indicator_system,
+                update_enemy_hp_indicator_system,
+            )
+                .run_if(in_state(GameState::Playing)),
+        )
         // Системы выбора апгрейда
         .add_systems(
             Update,
             handle_upgrade_button.run_if(in_state(GameState::LevelUpChoice)),
         )
         .run();
+}
+
+fn set_window_icon(
+    windows: Option<NonSend<WinitWindows>>,
+    primary_window: Query<Entity, With<PrimaryWindow>>,
+    mut has_set: Local<bool>,
+) {
+    if *has_set {
+        return;
+    }
+
+    let windows = match windows {
+        Some(windows) => windows,
+        None => return,
+    };
+
+    let window_entity = match primary_window.iter().next() {
+        Some(entity) => entity,
+        None => return,
+    };
+
+    let window = match windows.get_window(window_entity) {
+        Some(window) => window,
+        None => return,
+    };
+
+    let image = match image::open("assets/app_image/roggy.png") {
+        Ok(image) => image.into_rgba8(),
+        Err(_) => return,
+    };
+
+    let (width, height) = (image.width(), image.height());
+    let rgba = image.into_raw();
+
+    let icon = match Icon::from_rgba(rgba, width, height) {
+        Ok(icon) => icon,
+        Err(_) => return,
+    };
+
+    window.set_window_icon(Some(icon));
+    *has_set = true;
 }
