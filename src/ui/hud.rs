@@ -1,12 +1,13 @@
 use crate::components::{
     AttackRange, Boss, Enemy, EnemyHpIndicator, EnemyHpSegment, EnemyHpText, Experience, Gold,
-    Health, Hitbox, MovementSpeed, Pet, PickupRadius, Player, Team,
+    Health, Hitbox, LocalPlayer, MovementSpeed, Pet, PickupRadius, Player, Team,
 };
 use crate::constants::{
     ui_colors, ui_text, ENEMY_HP_INDICATOR_MIN_RADIUS, ENEMY_HP_INDICATOR_MIN_SEGMENT_RADIUS,
     ENEMY_HP_INDICATOR_OFFSET, ENEMY_HP_INDICATOR_RADIUS_MULT, ENEMY_HP_INDICATOR_SEGMENT_SCALE,
     ENEMY_HP_SEGMENTS, UI_FONT_SCALE,
 };
+use crate::network::NetworkServer;
 use crate::resources::{PlayerDamageFlash, UiFonts, UpgradeState, WaveConfig};
 use bevy::math::primitives::{Circle, Rectangle};
 use bevy::prelude::*;
@@ -38,6 +39,10 @@ pub struct TimerText;
 /// Маркер для счетчика золота
 #[derive(Component)]
 pub struct GoldText;
+
+/// Маркер для текста кода подключения
+#[derive(Component)]
+pub struct NetworkJoinCodeText;
 
 /// Маркер для полоски здоровья босса
 #[derive(Component)]
@@ -236,6 +241,7 @@ pub fn setup_hud(
     ui_fonts: Res<UiFonts>,
     mut player_damage_flash: ResMut<PlayerDamageFlash>,
     existing_hud: Query<Entity, With<HudUI>>,
+    network_server: Option<Res<NetworkServer>>,
 ) {
     // Если HUD уже существует, не создаем новый (возврат из LevelUpChoice)
     if !existing_hud.is_empty() {
@@ -337,11 +343,31 @@ pub fn setup_hud(
         BorderColor::all(Color::NONE),
         BackgroundColor(Color::NONE),
     ));
+
+    if let Some(server) = network_server {
+        commands.spawn((
+            HudUI,
+            Text::new(format!("Код: {}", server.join_code)),
+            TextFont {
+                font: font.clone(),
+                font_size: 16.0 * UI_FONT_SCALE,
+                ..default()
+            },
+            TextColor(ui_colors::TEXT_GRAY_LIGHT),
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(10.0),
+                bottom: Val::Px(10.0),
+                ..default()
+            },
+            NetworkJoinCodeText,
+        ));
+    }
 }
 
 /// Система обновления HUD
 pub fn ui_update_system(
-    player_query: Query<(&Health, &Experience, &Gold), With<Player>>,
+    player_query: Query<(&Health, &Experience, &Gold), (With<Player>, With<LocalPlayer>)>,
     wave_config: Res<WaveConfig>,
     mut hp_text_query: Query<
         &mut Text,
@@ -605,7 +631,10 @@ pub fn stats_panel_system(
     mut commands: Commands,
     stats_visible: Res<StatsPanelVisible>,
     mut panel_query: Query<&mut Node, With<StatsPanel>>,
-    player_query: Query<(&Health, &MovementSpeed, &Experience, &Gold), With<Player>>,
+    player_query: Query<
+        (&Health, &MovementSpeed, &Experience, &Gold),
+        (With<Player>, With<LocalPlayer>),
+    >,
     pet_query: Query<&Pet>,
     upgrade_state: Res<UpgradeState>,
     perf_stats: Res<PerformanceStats>,
@@ -929,7 +958,10 @@ pub fn dev_panel_system(
 /// Система обновления текста панели статов в реальном времени
 pub fn update_stats_panel_system(
     stats_visible: Res<StatsPanelVisible>,
-    player_query: Query<(&Health, &MovementSpeed, &Experience, &Gold), With<Player>>,
+    player_query: Query<
+        (&Health, &MovementSpeed, &Experience, &Gold),
+        (With<Player>, With<LocalPlayer>),
+    >,
     pet_query: Query<&Pet>,
     upgrade_state: Res<UpgradeState>,
     perf_stats: Res<PerformanceStats>,

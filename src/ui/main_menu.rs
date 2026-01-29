@@ -1,4 +1,5 @@
 use crate::constants::{ui_colors, ui_text, UI_FONT_SCALE};
+use crate::network::{start_client, start_host, NetworkMode, DEFAULT_PORT};
 use crate::resources::{TerrainConfig, TerrainSprites, UiFonts};
 use crate::systems::spawn_menu_terrain;
 use crate::ui::GameState;
@@ -7,6 +8,7 @@ use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResized};
 use rand::Rng;
+use std::net::SocketAddr;
 
 /// Маркер для UI главного меню
 #[derive(Component)]
@@ -31,6 +33,33 @@ pub struct PlayButton;
 /// Маркер для кнопки "Выход"
 #[derive(Component)]
 pub struct QuitButton;
+
+/// Маркер для кнопки "Host"
+#[derive(Component)]
+pub struct HostButton;
+
+/// Маркер для кнопки "Join"
+#[derive(Component)]
+pub struct JoinButton;
+
+/// Маркер для окна подключения
+#[derive(Component)]
+pub struct JoinMenuUI;
+
+/// Текст ввода кода подключения
+#[derive(Component)]
+pub struct JoinInputText;
+
+/// Текст ошибки подключения
+#[derive(Component)]
+pub struct JoinErrorText;
+
+#[derive(Resource, Default)]
+pub struct JoinCodeState {
+    pub active: bool,
+    pub text: String,
+    pub error: Option<String>,
+}
 
 #[derive(Component, Copy, Clone)]
 pub struct ButtonBaseColor(pub Color);
@@ -310,6 +339,60 @@ pub fn setup_main_menu(
                             ));
                         });
 
+                    // Кнопка "Host"
+                    button_container
+                        .spawn((
+                            Button,
+                            Node {
+                                width: Val::Px(320.0),
+                                height: Val::Px(70.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                            BackgroundColor(ui_colors::BUTTON_GREEN),
+                            HostButton,
+                            ButtonBaseColor(ui_colors::BUTTON_GREEN),
+                        ))
+                        .with_children(|button_parent| {
+                            button_parent.spawn((
+                                Text::new(ui_text::BTN_HOST),
+                                TextFont {
+                                    font: font.clone(),
+                                    font_size: 28.0 * UI_FONT_SCALE,
+                                    ..default()
+                                },
+                                TextColor(ui_colors::TEXT_WHITE),
+                            ));
+                        });
+
+                    // Кнопка "Join"
+                    button_container
+                        .spawn((
+                            Button,
+                            Node {
+                                width: Val::Px(320.0),
+                                height: Val::Px(70.0),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                            BackgroundColor(ui_colors::BUTTON_BLUE),
+                            JoinButton,
+                            ButtonBaseColor(ui_colors::BUTTON_BLUE),
+                        ))
+                        .with_children(|button_parent| {
+                            button_parent.spawn((
+                                Text::new(ui_text::BTN_JOIN),
+                                TextFont {
+                                    font: font.clone(),
+                                    font_size: 26.0 * UI_FONT_SCALE,
+                                    ..default()
+                                },
+                                TextColor(ui_colors::TEXT_WHITE),
+                            ));
+                        });
+
                     // Кнопка "Выход"
                     button_container
                         .spawn((
@@ -334,6 +417,78 @@ pub fn setup_main_menu(
                                     ..default()
                                 },
                                 TextColor(ui_colors::TEXT_WHITE),
+                            ));
+                        });
+                });
+
+            // Окно подключения (скрыто по умолчанию)
+            parent
+                .spawn((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        width: Val::Percent(100.0),
+                        height: Val::Percent(100.0),
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Center,
+                        display: Display::None,
+                        ..default()
+                    },
+                    BackgroundColor(ui_colors::OVERLAY_DARK),
+                    JoinMenuUI,
+                ))
+                .with_children(|overlay| {
+                    overlay
+                        .spawn((
+                            Node {
+                                width: Val::Px(520.0),
+                                height: Val::Px(260.0),
+                                flex_direction: FlexDirection::Column,
+                                align_items: AlignItems::Center,
+                                justify_content: JustifyContent::Center,
+                                row_gap: Val::Px(12.0),
+                                padding: UiRect::all(Val::Px(20.0)),
+                                ..default()
+                            },
+                            BackgroundColor(ui_colors::PANEL_DARK),
+                        ))
+                        .with_children(|panel| {
+                            panel.spawn((
+                                Text::new(ui_text::JOIN_TITLE),
+                                TextFont {
+                                    font: font.clone(),
+                                    font_size: 26.0 * UI_FONT_SCALE,
+                                    ..default()
+                                },
+                                TextColor(ui_colors::TEXT_YELLOW_LIGHT),
+                            ));
+                            panel.spawn((
+                                Text::new(ui_text::JOIN_HINT),
+                                TextFont {
+                                    font: font.clone(),
+                                    font_size: 16.0 * UI_FONT_SCALE,
+                                    ..default()
+                                },
+                                TextColor(ui_colors::TEXT_GRAY_LIGHT),
+                            ));
+                            panel.spawn((
+                                Text::new(""),
+                                TextFont {
+                                    font: font.clone(),
+                                    font_size: 20.0 * UI_FONT_SCALE,
+                                    ..default()
+                                },
+                                TextColor(ui_colors::TEXT_WHITE),
+                                JoinInputText,
+                            ));
+                            panel.spawn((
+                                Text::new(""),
+                                TextFont {
+                                    font: font.clone(),
+                                    font_size: 14.0 * UI_FONT_SCALE,
+                                    ..default()
+                                },
+                                TextColor(ui_colors::TEXT_RED_BRIGHT),
+                                JoinErrorText,
                             ));
                         });
                 });
@@ -534,15 +689,24 @@ pub fn menu_button_hover_system(
 pub fn handle_main_menu_buttons(
     mut commands: Commands,
     play_query: Query<&Interaction, (Changed<Interaction>, With<PlayButton>)>,
+    host_query: Query<&Interaction, (Changed<Interaction>, With<HostButton>)>,
+    join_query: Query<&Interaction, (Changed<Interaction>, With<JoinButton>)>,
     quit_query: Query<&Interaction, (Changed<Interaction>, With<QuitButton>, Without<PlayButton>)>,
     mut next_state: ResMut<NextState<GameState>>,
     menu_ui_query: Query<Entity, With<MainMenuUI>>,
     menu_sprite_query: Query<Entity, With<MenuSprite>>,
     mut exit: MessageWriter<AppExit>,
+    mut join_state: ResMut<JoinCodeState>,
+    mut network_mode: ResMut<NetworkMode>,
 ) {
     // Обработка кнопки "Играть"
     for interaction in play_query.iter() {
         if *interaction == Interaction::Pressed {
+            *network_mode = NetworkMode::Offline;
+            commands.remove_resource::<crate::network::NetworkServer>();
+            commands.remove_resource::<crate::network::NetworkClient>();
+            join_state.active = false;
+            join_state.error = None;
             // Удаляем UI главного меню
             for entity in menu_ui_query.iter() {
                 commands.entity(entity).despawn();
@@ -556,10 +720,167 @@ pub fn handle_main_menu_buttons(
         }
     }
 
+    // Обработка кнопки "Host"
+    for interaction in host_query.iter() {
+        if *interaction == Interaction::Pressed {
+            join_state.active = false;
+            join_state.error = None;
+            match start_host(&mut commands, DEFAULT_PORT) {
+                Ok(join_code) => {
+                    println!("Host started. Join code: {join_code}");
+                    for entity in menu_ui_query.iter() {
+                        commands.entity(entity).despawn();
+                    }
+                    for entity in menu_sprite_query.iter() {
+                        commands.entity(entity).despawn();
+                    }
+                    next_state.set(GameState::Playing);
+                }
+                Err(err) => {
+                    eprintln!("Host start failed: {err}");
+                }
+            }
+        }
+    }
+
+    // Обработка кнопки "Join"
+    for interaction in join_query.iter() {
+        if *interaction == Interaction::Pressed {
+            join_state.active = true;
+            join_state.error = None;
+        }
+    }
+
     // Обработка кнопки "Выход"
     for interaction in quit_query.iter() {
         if *interaction == Interaction::Pressed {
             exit.write(AppExit::Success);
+        }
+    }
+}
+
+pub fn join_menu_visibility_system(
+    join_state: Res<JoinCodeState>,
+    mut menu_query: Query<&mut Node, With<JoinMenuUI>>,
+    mut input_query: Query<&mut Text, (With<JoinInputText>, Without<JoinErrorText>)>,
+    mut error_query: Query<&mut Text, (With<JoinErrorText>, Without<JoinInputText>)>,
+) {
+    if !join_state.is_changed() {
+        return;
+    }
+
+    for mut node in menu_query.iter_mut() {
+        node.display = if join_state.active {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+
+    let display_text = if join_state.text.is_empty() {
+        "..."
+    } else {
+        join_state.text.as_str()
+    };
+
+    for mut text in input_query.iter_mut() {
+        text.0 = display_text.to_string();
+    }
+
+    let error_text = join_state.error.as_deref().unwrap_or("");
+    for mut text in error_query.iter_mut() {
+        text.0 = error_text.to_string();
+    }
+}
+
+pub fn join_menu_input_system(
+    mut commands: Commands,
+    mut join_state: ResMut<JoinCodeState>,
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    mut next_state: ResMut<NextState<GameState>>,
+    menu_ui_query: Query<Entity, With<MainMenuUI>>,
+    menu_sprite_query: Query<Entity, With<MenuSprite>>,
+) {
+    if !join_state.active {
+        return;
+    }
+
+    let mut new_char: Option<char> = None;
+    for (key, ch) in [
+        (KeyCode::Digit0, '0'),
+        (KeyCode::Digit1, '1'),
+        (KeyCode::Digit2, '2'),
+        (KeyCode::Digit3, '3'),
+        (KeyCode::Digit4, '4'),
+        (KeyCode::Digit5, '5'),
+        (KeyCode::Digit6, '6'),
+        (KeyCode::Digit7, '7'),
+        (KeyCode::Digit8, '8'),
+        (KeyCode::Digit9, '9'),
+        (KeyCode::Numpad0, '0'),
+        (KeyCode::Numpad1, '1'),
+        (KeyCode::Numpad2, '2'),
+        (KeyCode::Numpad3, '3'),
+        (KeyCode::Numpad4, '4'),
+        (KeyCode::Numpad5, '5'),
+        (KeyCode::Numpad6, '6'),
+        (KeyCode::Numpad7, '7'),
+        (KeyCode::Numpad8, '8'),
+        (KeyCode::Numpad9, '9'),
+        (KeyCode::Period, '.'),
+        (KeyCode::NumpadDecimal, '.'),
+        (KeyCode::Semicolon, ':'),
+    ] {
+        if keyboard_input.just_pressed(key) {
+            new_char = Some(ch);
+            break;
+        }
+    }
+
+    if let Some(ch) = new_char {
+        if join_state.text.len() < 64 {
+            join_state.text.push(ch);
+        }
+    }
+
+    if keyboard_input.just_pressed(KeyCode::Backspace) {
+        join_state.text.pop();
+    }
+
+    if keyboard_input.just_pressed(KeyCode::Escape) {
+        join_state.active = false;
+        join_state.error = None;
+        join_state.text.clear();
+        return;
+    }
+
+    if keyboard_input.just_pressed(KeyCode::Enter) {
+        let input = join_state.text.trim();
+        if input.is_empty() {
+            join_state.error = Some("Код пустой".to_string());
+            return;
+        }
+        match input.parse::<SocketAddr>() {
+            Ok(addr) => match start_client(&mut commands, addr) {
+                Ok(()) => {
+                    for entity in menu_ui_query.iter() {
+                        commands.entity(entity).despawn();
+                    }
+                    for entity in menu_sprite_query.iter() {
+                        commands.entity(entity).despawn();
+                    }
+                    join_state.active = false;
+                    join_state.error = None;
+                    join_state.text.clear();
+                    next_state.set(GameState::Playing);
+                }
+                Err(err) => {
+                    join_state.error = Some(err);
+                }
+            },
+            Err(_) => {
+                join_state.error = Some("Неверный формат. Пример: 192.168.0.10:14000".to_string());
+            }
         }
     }
 }
@@ -569,6 +890,7 @@ pub fn cleanup_main_menu(
     mut commands: Commands,
     menu_query: Query<Entity, With<MainMenuUI>>,
     menu_sprite_query: Query<Entity, With<MenuSprite>>,
+    mut join_state: ResMut<JoinCodeState>,
 ) {
     for entity in menu_query.iter() {
         commands.entity(entity).despawn();
@@ -576,4 +898,6 @@ pub fn cleanup_main_menu(
     for entity in menu_sprite_query.iter() {
         commands.entity(entity).despawn();
     }
+    join_state.active = false;
+    join_state.error = None;
 }

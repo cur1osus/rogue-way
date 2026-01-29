@@ -11,6 +11,10 @@ pub struct Pet {
     pub pet_type: PetType,
 }
 
+/// Владелец питомца (идентификатор игрока)
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PetOwner(pub u32);
+
 /// Типы питомцев
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PetType {

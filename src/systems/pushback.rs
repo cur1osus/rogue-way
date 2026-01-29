@@ -5,9 +5,9 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use crate::components::{
-    Enemy, KnockbackEffect, PhysicsPosition, Player, PlayerPushbackOverlay, PushbackAttack,
-    PushbackAttackCooldown, PushbackConeVisual, PushbackReadyGlow, PushbackReadyGlowPending, Team,
-    Velocity,
+    Enemy, KnockbackEffect, LocalPlayer, PhysicsPosition, Player, PlayerInputState,
+    PlayerPushbackOverlay, PushbackAttack, PushbackAttackCooldown, PushbackConeVisual,
+    PushbackReadyGlow, PushbackReadyGlowPending, Team, Velocity,
 };
 use crate::constants::{
     PUSHBACK_OVERLAY_OFFSET, PUSHBACK_OVERLAY_SCALE, PUSHBACK_READY_GLOW_INNER_ALPHA,
@@ -43,7 +43,6 @@ pub fn pushback_last_direction_system(
 /// Обработка ввода пробела: запуск атаки отталкивания, применение импульса врагам в конусе 120°.
 pub fn pushback_input_system(
     time: Res<Time>,
-    keyboard_input: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     area_visuals: Res<AreaDamageVisualAssets>,
@@ -51,6 +50,7 @@ pub fn pushback_input_system(
         (
             Entity,
             &Transform,
+            &mut PlayerInputState,
             &mut PushbackAttack,
             &mut PushbackAttackCooldown,
         ),
@@ -59,15 +59,18 @@ pub fn pushback_input_system(
     enemy_query: Query<(Entity, &Transform, &Team), With<Enemy>>,
     attack_sprites: Res<PlayerAttackSprites>,
 ) {
-    for (player_entity, player_transform, mut pushback, mut cooldown) in player_query.iter_mut() {
+    for (player_entity, player_transform, mut input_state, mut pushback, mut cooldown) in
+        player_query.iter_mut()
+    {
         cooldown.timer.tick(time.delta());
 
         if pushback.is_attacking {
             continue;
         }
-        if !keyboard_input.just_pressed(KeyCode::Space) {
+        if !input_state.pushback {
             continue;
         }
+        input_state.pushback = false;
         if !cooldown.timer.is_finished() {
             continue;
         }
@@ -452,7 +455,14 @@ fn generate_pushback_glow_image(
 /// Генерация текстуры свечения и привязка к дочернему спрайту.
 pub fn pushback_ready_glow_setup_system(
     mut commands: Commands,
-    player_query: Query<(Entity, &Sprite), (With<Player>, Without<PushbackReadyGlowPending>)>,
+    player_query: Query<
+        (Entity, &Sprite),
+        (
+            With<Player>,
+            With<LocalPlayer>,
+            Without<PushbackReadyGlowPending>,
+        ),
+    >,
     mut glow_query: Query<
         (Entity, &ChildOf, &mut Sprite),
         (With<PushbackReadyGlowPending>, Without<Player>),
@@ -501,7 +511,10 @@ pub fn pushback_ready_glow_setup_system(
 
 /// Синхронизация кадра свечения с текущим кадром игрока.
 pub fn pushback_ready_glow_sync_system(
-    player_query: Query<(Entity, &Sprite), (With<Player>, Without<PushbackReadyGlow>)>,
+    player_query: Query<
+        (Entity, &Sprite),
+        (With<Player>, With<LocalPlayer>, Without<PushbackReadyGlow>),
+    >,
     mut glow_query: Query<(&ChildOf, &mut Sprite), (With<PushbackReadyGlow>, Without<Player>)>,
 ) {
     let Ok((player_entity, player_sprite)) = player_query.single() else {
@@ -525,7 +538,10 @@ pub fn pushback_ready_glow_sync_system(
 
 /// Управление синим свечением: видно, когда атака отталкивания готова.
 pub fn pushback_ready_glow_system(
-    player_query: Query<(Entity, &PushbackAttack, &PushbackAttackCooldown), With<Player>>,
+    player_query: Query<
+        (Entity, &PushbackAttack, &PushbackAttackCooldown),
+        (With<Player>, With<LocalPlayer>),
+    >,
     mut glow_query: Query<(&ChildOf, &mut Sprite), With<PushbackReadyGlow>>,
 ) {
     for (player_entity, pushback, cooldown) in player_query.iter() {

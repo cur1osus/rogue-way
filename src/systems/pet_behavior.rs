@@ -51,22 +51,33 @@ pub fn pet_ai_system(
     obstacle_query: Query<(&PhysicsPosition, &Hitbox, &CollisionLayer), Without<Pet>>,
     xp_gem_query: Query<(Entity, &Transform), With<XpGem>>,
 ) {
-    let Ok((player_transform, player_velocity, player_health)) = player_query.single() else {
+    let mut player_count = 0usize;
+    let mut pos_sum = Vec2::ZERO;
+    let mut vel_sum = Vec2::ZERO;
+    let mut health_ratio_sum = 0.0;
+    for (transform, velocity, health) in player_query.iter() {
+        player_count += 1;
+        pos_sum += transform.translation.truncate();
+        vel_sum += velocity.0;
+        let ratio = if health.max > 0.0 {
+            (health.current / health.max).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        health_ratio_sum += ratio;
+    }
+    if player_count == 0 {
         return;
-    };
-
-    let player_pos = player_transform.translation.truncate();
-    let player_dir = if player_velocity.0.length_squared() > 1.0 {
-        player_velocity.0.normalize_or_zero()
+    }
+    let player_pos = pos_sum / player_count as f32;
+    let avg_velocity = vel_sum / player_count as f32;
+    let player_dir = if avg_velocity.length_squared() > 1.0 {
+        avg_velocity.normalize_or_zero()
     } else {
         Vec2::Y
     };
     let player_right = Vec2::new(-player_dir.y, player_dir.x);
-    let player_health_ratio = if player_health.max > 0.0 {
-        player_health.current / player_health.max
-    } else {
-        1.0
-    };
+    let player_health_ratio = health_ratio_sum / player_count as f32;
 
     let mut enemies: Vec<EnemyInfo> = Vec::with_capacity(enemy_query.iter().size_hint().0);
     for (entity, transform, hitbox, enemy) in enemy_query.iter() {

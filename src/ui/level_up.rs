@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::components::{
     AttackRange, AttackSpeed, AttackTimer, Damage, Health, MovementSpeed, Pet, PetMovementSpeed,
-    PetType, Player, PushbackAttack,
+    PetType, PhysicsPosition, Player, PlayerId, PushbackAttack,
 };
 use crate::constants::{ui_colors, ui_text, AREA_DAMAGE_CONE_ANGLE_MAX_DEG, UI_FONT_SCALE};
 use crate::resources::{MetaProgression, PetSpriteSheet, UiFonts, UpgradeState};
@@ -296,7 +296,16 @@ pub fn handle_upgrade_button(
     ui_query: Query<Entity, With<LevelUpUI>>,
     mut next_state: ResMut<NextState<GameState>>,
     mut upgrade_state: ResMut<UpgradeState>,
-    mut player_query: Query<(&mut Health, &mut MovementSpeed, &mut PushbackAttack), With<Player>>,
+    mut player_query: Query<
+        (
+            &PlayerId,
+            &PhysicsPosition,
+            &mut Health,
+            &mut MovementSpeed,
+            &mut PushbackAttack,
+        ),
+        With<Player>,
+    >,
     mut pet_query: Query<
         (
             &mut Damage,
@@ -337,7 +346,16 @@ fn apply_upgrade(
     commands: &mut Commands,
     upgrade: &UpgradeType,
     upgrade_state: &mut UpgradeState,
-    player_query: &mut Query<(&mut Health, &mut MovementSpeed, &mut PushbackAttack), With<Player>>,
+    player_query: &mut Query<
+        (
+            &PlayerId,
+            &PhysicsPosition,
+            &mut Health,
+            &mut MovementSpeed,
+            &mut PushbackAttack,
+        ),
+        With<Player>,
+    >,
     pet_query: &mut Query<
         (
             &mut Damage,
@@ -352,7 +370,16 @@ fn apply_upgrade(
 ) {
     match upgrade {
         UpgradeType::SummonPet(pet_type) => {
-            spawn_pet(commands, *pet_type, Vec2::ZERO, upgrade_state, pet_sprites);
+            for (player_id, physics_pos, _, _, _) in player_query.iter_mut() {
+                spawn_pet(
+                    commands,
+                    *pet_type,
+                    physics_pos.0,
+                    upgrade_state,
+                    pet_sprites,
+                    player_id.0,
+                );
+            }
         }
         UpgradeType::PetDamageBoost(amount) => {
             upgrade_state.pet_damage_mult *= 1.0 + amount;
@@ -380,30 +407,30 @@ fn apply_upgrade(
             }
         }
         UpgradeType::MaxHpBoost(amount) => {
-            if let Ok((mut health, _, _)) = player_query.single_mut() {
+            for (_, _, mut health, _, _) in player_query.iter_mut() {
                 health.max += amount;
-                health.current += amount; // Также восстанавливаем HP
+                health.current += amount;
             }
         }
         UpgradeType::HealPlayer(percent) => {
-            if let Ok((mut health, _, _)) = player_query.single_mut() {
+            for (_, _, mut health, _, _) in player_query.iter_mut() {
                 let heal_amount = health.max * percent;
                 health.current = (health.current + heal_amount).min(health.max);
             }
         }
         UpgradeType::MovementSpeedBoost(amount) => {
-            if let Ok((_, mut speed, _)) = player_query.single_mut() {
+            for (_, _, _, mut speed, _) in player_query.iter_mut() {
                 speed.0 *= 1.0 + amount;
             }
         }
         UpgradeType::PushbackConeBoost(amount) => {
-            if let Ok((_, _, mut pushback)) = player_query.single_mut() {
+            for (_, _, _, _, mut pushback) in player_query.iter_mut() {
                 let new_angle = pushback.cone_angle + amount.to_radians();
                 pushback.cone_angle = new_angle.min(std::f32::consts::TAU);
             }
         }
         UpgradeType::PushbackForceBoost(amount) => {
-            if let Ok((_, _, mut pushback)) = player_query.single_mut() {
+            for (_, _, _, _, mut pushback) in player_query.iter_mut() {
                 pushback.pushback_force += amount;
             }
         }

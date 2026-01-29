@@ -6,6 +6,34 @@ use crate::constants::{PUSHBACK_CONE_ANGLE_DEG, PUSHBACK_FORCE, PUSHBACK_RADIUS}
 #[derive(Component)]
 pub struct Player;
 
+/// Идентификатор игрока для кооператива
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PlayerId(pub u32);
+
+/// Маркер локального игрока (для камеры и ввода)
+#[derive(Component)]
+pub struct LocalPlayer;
+
+/// Маркер удаленного игрока (сетевой клиент)
+#[derive(Component)]
+pub struct RemotePlayer;
+
+/// Состояние ввода игрока (движение и действия)
+#[derive(Component, Debug, Clone, Copy)]
+pub struct PlayerInputState {
+    pub movement: Vec2,
+    pub pushback: bool,
+}
+
+impl Default for PlayerInputState {
+    fn default() -> Self {
+        Self {
+            movement: Vec2::ZERO,
+            pushback: false,
+        }
+    }
+}
+
 /// Здоровье сущности (базовое значение 100 HP для игрока)
 #[derive(Component)]
 pub struct Health {

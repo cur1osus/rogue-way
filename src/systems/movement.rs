@@ -1,6 +1,7 @@
 use crate::components::{
     AttackRange, DeathAnimation, Enemy, EnemyAIConfig, EnemyAction, EnemyBlackboard,
-    EnemyPerception, EnemyState, Health, MovementSpeed, Player, SlowEffect, Target, Velocity,
+    EnemyPerception, EnemyState, Health, LocalPlayer, MovementSpeed, Player, PlayerInputState,
+    SlowEffect, Target, Velocity,
 };
 use bevy::prelude::*;
 use rand::Rng;
@@ -9,9 +10,9 @@ use std::cmp::Ordering;
 /// Система обработки ввода игрока (WASD/Arrow keys)
 pub fn input_system(
     keyboard_input: Res<ButtonInput<KeyCode>>,
-    mut query: Query<(&mut Velocity, &MovementSpeed), With<Player>>,
+    mut query: Query<&mut PlayerInputState, (With<Player>, With<LocalPlayer>)>,
 ) {
-    for (mut velocity, speed) in query.iter_mut() {
+    for mut input_state in query.iter_mut() {
         let mut direction = Vec2::ZERO;
 
         // WASD
@@ -28,12 +29,22 @@ pub fn input_system(
             direction.x += 1.0;
         }
 
-        // Нормализуем направление и применяем скорость
+        // Нормализуем направление и сохраняем ввод
         if direction != Vec2::ZERO {
             direction = direction.normalize();
         }
 
-        velocity.0 = direction * speed.0;
+        input_state.movement = direction;
+        input_state.pushback = keyboard_input.just_pressed(KeyCode::Space);
+    }
+}
+
+/// Применяем ввод к скорости движения (для хоста/сингла)
+pub fn apply_player_input_system(
+    mut query: Query<(&PlayerInputState, &MovementSpeed, &mut Velocity), With<Player>>,
+) {
+    for (input_state, speed, mut velocity) in query.iter_mut() {
+        velocity.0 = input_state.movement * speed.0;
     }
 }
 
@@ -182,11 +193,13 @@ pub fn enemy_ai_system(
         >,
     )>,
 ) {
-    let Ok((_player_entity, player_transform)) = player_query.single() else {
+    let player_positions: Vec<Vec2> = player_query
+        .iter()
+        .map(|(_, transform)| transform.translation.truncate())
+        .collect();
+    if player_positions.is_empty() {
         return;
-    };
-
-    let player_pos = player_transform.translation.truncate();
+    }
     let now = time.elapsed_secs();
     let dt = time.delta();
 
@@ -197,8 +210,11 @@ pub fn enemy_ai_system(
         if vision_range <= 0.0 {
             continue;
         }
-        let distance_sq = (transform.translation.truncate() - player_pos).length_squared();
-        if distance_sq <= vision_range * vision_range {
+        let enemy_pos = transform.translation.truncate();
+        let sees_player = player_positions
+            .iter()
+            .any(|pos| enemy_pos.distance_squared(*pos) <= vision_range * vision_range);
+        if sees_player {
             alert_sources.push(transform.translation.truncate());
         }
     }
@@ -231,7 +247,16 @@ pub fn enemy_ai_system(
         }
 
         let enemy_pos = transform.translation.truncate();
-        let distance = enemy_pos.distance(player_pos);
+        let mut nearest_player_pos = player_positions[0];
+        let mut nearest_distance_sq = enemy_pos.distance_squared(nearest_player_pos);
+        for pos in player_positions.iter().skip(1) {
+            let dist_sq = enemy_pos.distance_squared(*pos);
+            if dist_sq < nearest_distance_sq {
+                nearest_distance_sq = dist_sq;
+                nearest_player_pos = *pos;
+            }
+        }
+        let distance = nearest_distance_sq.sqrt();
 
         let player_visible = perception.vision_range > 0.0 && distance <= perception.vision_range;
         let alert_range_sq = perception.alert_range * perception.alert_range;
@@ -241,7 +266,7 @@ pub fn enemy_ai_system(
                 .any(|pos| pos.distance_squared(enemy_pos) <= alert_range_sq);
 
         if player_visible || alerted_by_ally {
-            memory.last_seen_pos = Some(player_pos);
+            memory.last_seen_pos = Some(nearest_player_pos);
             memory.last_seen_time = now;
         }
 
@@ -359,10 +384,10 @@ pub fn enemy_ai_system(
 
         match memory.current_action {
             EnemyAction::ApproachTarget => {
-                direction = (player_pos - enemy_pos).normalize_or_zero();
+                direction = (nearest_player_pos - enemy_pos).normalize_or_zero();
             }
             EnemyAction::KeepDistance | EnemyAction::Retreat => {
-                direction = (enemy_pos - player_pos).normalize_or_zero();
+                direction = (enemy_pos - nearest_player_pos).normalize_or_zero();
                 action_speed_scale = if memory.current_action == EnemyAction::Retreat {
                     1.15
                 } else {
@@ -385,7 +410,7 @@ pub fn enemy_ai_system(
                     attack_range.0
                 };
                 if distance > effective_range * 0.9 {
-                    direction = (player_pos - enemy_pos).normalize_or_zero();
+                    direction = (nearest_player_pos - enemy_pos).normalize_or_zero();
                     action_speed_scale = 0.6;
                 } else {
                     direction = Vec2::ZERO;

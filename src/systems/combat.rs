@@ -1,8 +1,8 @@
 use crate::components::{
     AnimationTimer, AttackAnimation, AttackRange, AttackTimer, Boss, Damage, DeathAnimation, Enemy,
     EnemyAIConfig, EnemyAction, EnemyBlackboard, FloatingText, Gold, GoldHighlightTimer,
-    GoldPickup, Health, HitFlash, Hitbox, MovementSpeed, PendingAttack, Pet, PetType, Player,
-    SlowEffect, Target, Team, Velocity, XpGem,
+    GoldPickup, Health, HitFlash, Hitbox, LocalPlayer, MovementSpeed, PendingAttack, Pet, PetType,
+    Player, SlowEffect, Target, Team, Velocity, XpGem,
 };
 use crate::constants::{
     AREA_DAMAGE_CONE_ANGLE_MAX, DAMAGE_TEXT_DURATION, GOLD_SCALE, PET_HITBOX_SCALE, UI_FONT_SCALE,
@@ -164,9 +164,13 @@ pub fn enemy_attack_system(
         (With<Enemy>, Without<DeathAnimation>),
     >,
 ) {
-    let Ok((player_entity, player_transform)) = player_query.single() else {
+    let players: Vec<(Entity, Vec3)> = player_query
+        .iter()
+        .map(|(entity, transform)| (entity, transform.translation))
+        .collect();
+    if players.is_empty() {
         return;
-    };
+    }
 
     for (
         enemy_entity,
@@ -188,9 +192,21 @@ pub fn enemy_attack_system(
             continue;
         }
 
-        let distance_sq = enemy_transform
-            .translation
-            .distance_squared(player_transform.translation);
+        let mut nearest_player: Option<(Entity, f32)> = None;
+        for (player_entity, player_pos) in players.iter().copied() {
+            let distance_sq = enemy_transform.translation.distance_squared(player_pos);
+            if nearest_player
+                .as_ref()
+                .map(|(_, best)| distance_sq < *best)
+                .unwrap_or(true)
+            {
+                nearest_player = Some((player_entity, distance_sq));
+            }
+        }
+
+        let Some((player_entity, distance_sq)) = nearest_player else {
+            continue;
+        };
         let mut effective_range = attack_range.0;
         let mut attack_damage = damage.0;
         let mut attack_duration = attack_timer.timer.duration().as_secs_f32();
@@ -358,7 +374,7 @@ pub fn damage_system(
     mut damage_events: MessageReader<DamageEvent>,
     mut health_query: Query<(&mut Health, &Transform, Option<&Hitbox>)>,
     enemy_query: Query<(&Enemy, Entity, Option<&Boss>), With<Enemy>>,
-    player_query: Query<(Entity, &Gold), With<Player>>,
+    player_query: Query<(Entity, &Gold, Option<&LocalPlayer>), With<Player>>,
     mut sprite_query: Query<(Entity, &mut Sprite, Option<&mut HitFlash>)>,
     upgrade_state: Res<UpgradeState>,
     ui_fonts: Res<UiFonts>,
@@ -370,7 +386,8 @@ pub fn damage_system(
 ) {
     for event in damage_events.read() {
         if let Ok((mut health, transform, hitbox)) = health_query.get_mut(event.target) {
-            let is_player = player_query.get(event.target).is_ok();
+            let player_info = player_query.get(event.target).ok();
+            let is_player = player_info.is_some();
             let enemy_info = enemy_query.get(event.target).ok();
 
             if health.current <= 0.0 {
@@ -381,8 +398,10 @@ pub fn damage_system(
                 health.current = 0.0;
             }
 
-            if is_player && event.damage > 0.0 {
-                player_damage_flash.trigger(1.0, 0.35);
+            if let Some((_entity, _gold, local_opt)) = player_info {
+                if local_opt.is_some() && event.damage > 0.0 {
+                    player_damage_flash.trigger(1.0, 0.35);
+                }
             }
             let target_pos = transform.translation;
 
@@ -522,23 +541,18 @@ pub fn damage_system(
                 }
 
                 // Если это игрок - game over
-                if is_player {
-                    let Ok((_player_entity, player_gold)) = player_query.get(event.target) else {
-                        continue;
-                    };
+                if let Some((_player_entity, player_gold, local_opt)) = player_info {
+                    if local_opt.is_some() {
+                        let run_time = wave_config.game_time as u32;
+                        if run_time > meta.save_data.best_time {
+                            meta.save_data.best_time = run_time;
+                        }
 
-                    let run_time = wave_config.game_time as u32;
-                    if run_time > meta.save_data.best_time {
-                        meta.save_data.best_time = run_time;
+                        // Сохраняем золото в метапрогрессию (§3.2.3)
+                        meta.save_data.add_gold(player_gold.amount);
+                        meta.save_data.total_runs += 1;
+                        meta.mark_dirty();
                     }
-
-                    // Сохраняем золото в метапрогрессию (§3.2.3)
-                    meta.save_data.add_gold(player_gold.amount);
-                    meta.save_data.total_runs += 1;
-                    meta.mark_dirty();
-
-                    // TODO: Реализовать экран game over и возврат в магазин
-                    // Пока просто выводим сообщение
                 }
             }
         }

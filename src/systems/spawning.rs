@@ -25,9 +25,17 @@ pub fn spawn_system(
     wave_config.update_difficulty();
 
     // Получаем игрока и его позицию
-    let Ok((player_entity, player_transform)) = player_query.single() else {
+    let player_data: Vec<(Entity, Vec2)> = player_query
+        .iter()
+        .map(|(entity, transform)| (entity, transform.translation.truncate()))
+        .collect();
+    if player_data.is_empty() {
         return;
-    };
+    }
+    let center = player_data
+        .iter()
+        .fold(Vec2::ZERO, |acc, (_, pos)| acc + *pos)
+        / player_data.len() as f32;
 
     // Получаем размер окна для спавна за пределами экрана
     let Ok(window) = windows.single() else {
@@ -40,8 +48,8 @@ pub fn spawn_system(
     check_boss_spawn(
         &mut commands,
         &mut wave_config,
-        player_entity,
-        player_transform.translation.truncate(),
+        &player_data,
+        center,
         window_width,
         window_height,
         &enemy_sprites,
@@ -64,19 +72,18 @@ pub fn spawn_system(
 
     // Спавним врагов
     for _ in 0..spawn_count {
-        let spawn_pos = get_spawn_position_outside_screen(
-            player_transform.translation.truncate(),
-            window_width,
-            window_height,
-        );
+        let spawn_pos = get_spawn_position_outside_screen(center, window_width, window_height);
 
         // Выбираем тип врага на основе времени игры
         let enemy_type = choose_enemy_type(wave_config.game_time);
+        let target_player = choose_target_player(&player_data, spawn_pos)
+            .map(|(entity, _)| entity)
+            .unwrap_or(player_data[0].0);
         spawn_enemy(
             &mut commands,
             enemy_type,
             spawn_pos,
-            player_entity,
+            target_player,
             wave_config.difficulty_multiplier,
             &enemy_sprites,
         );
@@ -87,8 +94,8 @@ pub fn spawn_system(
 fn check_boss_spawn(
     commands: &mut Commands,
     wave_config: &mut WaveConfig,
-    player_entity: Entity,
-    player_pos: Vec2,
+    player_data: &[(Entity, Vec2)],
+    center: Vec2,
     window_width: f32,
     window_height: f32,
     enemy_sprites: &EnemySpriteSheet,
@@ -96,12 +103,15 @@ fn check_boss_spawn(
     // Босс на 5 минутах
     if wave_config.game_time >= 300.0 && !wave_config.boss_5min_spawned {
         wave_config.boss_5min_spawned = true;
-        let spawn_pos = get_spawn_position_outside_screen(player_pos, window_width, window_height);
+        let spawn_pos = get_spawn_position_outside_screen(center, window_width, window_height);
+        let target_player = choose_target_player(player_data, spawn_pos)
+            .map(|(entity, _)| entity)
+            .unwrap_or(player_data[0].0);
         spawn_boss(
             commands,
             BossType::BanditLeader,
             spawn_pos,
-            player_entity,
+            target_player,
             enemy_sprites,
         );
     }
@@ -109,12 +119,15 @@ fn check_boss_spawn(
     // Босс на 10 минутах
     if wave_config.game_time >= 600.0 && !wave_config.boss_10min_spawned {
         wave_config.boss_10min_spawned = true;
-        let spawn_pos = get_spawn_position_outside_screen(player_pos, window_width, window_height);
+        let spawn_pos = get_spawn_position_outside_screen(center, window_width, window_height);
+        let target_player = choose_target_player(player_data, spawn_pos)
+            .map(|(entity, _)| entity)
+            .unwrap_or(player_data[0].0);
         spawn_boss(
             commands,
             BossType::ThiefKing,
             spawn_pos,
-            player_entity,
+            target_player,
             enemy_sprites,
         );
     }
@@ -122,15 +135,33 @@ fn check_boss_spawn(
     // Босс на 15 минутах
     if wave_config.game_time >= 900.0 && !wave_config.boss_15min_spawned {
         wave_config.boss_15min_spawned = true;
-        let spawn_pos = get_spawn_position_outside_screen(player_pos, window_width, window_height);
+        let spawn_pos = get_spawn_position_outside_screen(center, window_width, window_height);
+        let target_player = choose_target_player(player_data, spawn_pos)
+            .map(|(entity, _)| entity)
+            .unwrap_or(player_data[0].0);
         spawn_boss(
             commands,
             BossType::BruteChieftain,
             spawn_pos,
-            player_entity,
+            target_player,
             enemy_sprites,
         );
     }
+}
+
+fn choose_target_player(player_data: &[(Entity, Vec2)], position: Vec2) -> Option<(Entity, f32)> {
+    let mut best: Option<(Entity, f32)> = None;
+    for (entity, player_pos) in player_data.iter().copied() {
+        let distance_sq = position.distance_squared(player_pos);
+        if best
+            .as_ref()
+            .map(|(_, best_distance)| distance_sq < *best_distance)
+            .unwrap_or(true)
+        {
+            best = Some((entity, distance_sq));
+        }
+    }
+    best
 }
 
 /// Создает босса

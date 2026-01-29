@@ -467,8 +467,20 @@ pub mod ui_text {
     /// Кнопка "Играть"
     pub const BTN_PLAY: &str = "⚔ ИГРАТЬ ⚔";
 
+    /// Кнопка "Host"
+    pub const BTN_HOST: &str = "ХОСТ";
+
+    /// Кнопка "Join"
+    pub const BTN_JOIN: &str = "ПОДКЛЮЧИТЬСЯ";
+
     /// Кнопка "Выход"
     pub const BTN_EXIT: &str = "ВЫХОД";
+
+    /// Заголовок окна подключения
+    pub const JOIN_TITLE: &str = "ПОДКЛЮЧЕНИЕ";
+
+    /// Подсказка для кода подключения
+    pub const JOIN_HINT: &str = "Введи код: IP:PORT";
 
     // ========================================
     // МАГАЗИН

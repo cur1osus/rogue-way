@@ -1,6 +1,8 @@
 use bevy::prelude::*;
 
-use crate::components::{Gold, GoldHighlightTimer, GoldPickup, Health, PetType, Player, XpGem};
+use crate::components::{
+    Gold, GoldHighlightTimer, GoldPickup, Health, LocalPlayer, PetType, Player, PlayerId, XpGem,
+};
 use crate::constants::{GOLD_SCALE, XP_GEM_SCALE};
 use crate::resources::{GoldSprites, PetSpriteSheet, UpgradeState, XpGemSprites};
 use crate::systems::economy::GainXpEvent;
@@ -16,7 +18,10 @@ pub fn dev_panel_actions_system(
     mut commands: Commands,
     keyboard_input: Res<ButtonInput<KeyCode>>,
     dev_visible: Res<DevPanelVisible>,
-    mut player_query: Query<(&Transform, &mut Gold, &mut Health), With<Player>>,
+    mut player_query: Query<
+        (&Transform, &mut Gold, &mut Health, &PlayerId),
+        (With<Player>, With<LocalPlayer>),
+    >,
     mut gain_xp_events: MessageWriter<GainXpEvent>,
     xp_gem_sprites: Res<XpGemSprites>,
     gold_sprites: Res<GoldSprites>,
@@ -28,7 +33,8 @@ pub fn dev_panel_actions_system(
         return;
     }
 
-    let Ok((player_transform, mut player_gold, mut player_health)) = player_query.single_mut()
+    let Ok((player_transform, mut player_gold, mut player_health, player_id)) =
+        player_query.single_mut()
     else {
         return;
     };
@@ -81,6 +87,7 @@ pub fn dev_panel_actions_system(
             player_pos + next_spawn_offset(&mut spawn_index, 32.0),
             &upgrade_state,
             &pet_sprites,
+            player_id.0,
         );
     }
 
@@ -91,6 +98,7 @@ pub fn dev_panel_actions_system(
             player_pos + next_spawn_offset(&mut spawn_index, 32.0),
             &upgrade_state,
             &pet_sprites,
+            player_id.0,
         );
     }
 
@@ -101,6 +109,7 @@ pub fn dev_panel_actions_system(
             player_pos + next_spawn_offset(&mut spawn_index, 32.0),
             &upgrade_state,
             &pet_sprites,
+            player_id.0,
         );
     }
 
@@ -111,6 +120,7 @@ pub fn dev_panel_actions_system(
             player_pos + next_spawn_offset(&mut spawn_index, 32.0),
             &upgrade_state,
             &pet_sprites,
+            player_id.0,
         );
     }
 }

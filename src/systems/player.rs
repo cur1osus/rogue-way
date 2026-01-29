@@ -4,10 +4,10 @@ use rand::seq::SliceRandom;
 
 use crate::components::{
     AnimationIndices, AnimationTimer, AttackRange, AttackSpeed, AttackTimer, CollisionLayer,
-    Damage, DetectionRange, Experience, Gold, Health, Hitbox, MovementSpeed, Pet, PetBlackboard,
-    PetMovementSpeed, PetType, PhysicsPosition, PickupRadius, Player, PlayerAnimation,
-    PreviousPhysicsPosition, PushbackAttack, PushbackAttackCooldown, PushbackReadyGlow,
-    PushbackReadyGlowPending, Team, Velocity,
+    Damage, DetectionRange, Experience, Gold, Health, Hitbox, LocalPlayer, MovementSpeed, Pet,
+    PetBlackboard, PetMovementSpeed, PetOwner, PetType, PhysicsPosition, PickupRadius, Player,
+    PlayerAnimation, PlayerId, PlayerInputState, PreviousPhysicsPosition, PushbackAttack,
+    PushbackAttackCooldown, PushbackReadyGlow, PushbackReadyGlowPending, Team, Velocity,
 };
 use crate::constants::{
     PET_HITBOX_SCALE, PLAYER_HITBOX_SCALE, PLAYER_SCALE, PUSHBACK_READY_GLOW_SCALE,
@@ -32,19 +32,16 @@ const PLAYER_FRAME_X_RANGES: [(u32, u32); PLAYER_SPRITE_FRAMES] = [
 ];
 const PET_ANIMATION_SECONDS: f32 = 0.12;
 
-/// Система настройки игрока (запускается один раз при старте)
-pub fn setup_player(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
-    meta: Res<MetaProgression>,
-    existing_player: Query<Entity, With<Player>>,
-) {
-    // Если игрок уже существует, не создаем нового (возврат из LevelUpChoice)
-    if !existing_player.is_empty() {
-        return;
-    }
+pub const LOCAL_PLAYER_ID: u32 = 1;
 
+pub fn spawn_player_entity(
+    commands: &mut Commands,
+    asset_server: &Res<AssetServer>,
+    texture_atlas_layouts: &mut ResMut<Assets<TextureAtlasLayout>>,
+    meta: &Res<MetaProgression>,
+    player_id: PlayerId,
+    is_local: bool,
+) -> Entity {
     let texture = asset_server.load("sprites/sprite.png");
     let mut layout = TextureAtlasLayout::new_empty(UVec2::new(
         PLAYER_SPRITE_SHEET_WIDTH,
@@ -61,46 +58,55 @@ pub fn setup_player(
     let right_start = 0;
     let left_start = 0;
 
-    // Применяем постоянные улучшения из метапрогрессии (§3.2.2, §3.2.3)
     let upgrades = &meta.save_data.permanent_upgrades;
     let base_hp = upgrades.get_max_hp();
     let base_speed = 200.0 * upgrades.get_movement_speed_multiplier();
     let starting_level = upgrades.get_starting_level();
     let starting_gold = upgrades.get_starting_gold();
 
-    // Создаем игрока с улучшенными статами
-    let player_entity = commands
-        .spawn((
-            Sprite {
-                image: texture,
-                texture_atlas: Some(TextureAtlas {
-                    layout: texture_atlas_layout,
-                    index: right_start,
-                }),
-                ..default()
-            },
-            Transform::from_xyz(0.0, 0.0, 1.0).with_scale(Vec3::splat(PLAYER_SCALE)),
-            Player,
-            Hitbox::from_full_size(PLAYER_FRAME_SIZE * PLAYER_SCALE * PLAYER_HITBOX_SCALE),
-            CollisionLayer::player(),
-            Health::new(base_hp),      // HP с учетом улучшений
-            MovementSpeed(base_speed), // Скорость с учетом улучшений
-            Velocity::default(),
-            Team(Team::PLAYER),
-            Experience::new_with_level(starting_level), // Стартовый уровень из улучшений
-            Gold::new(starting_gold),                   // Стартовое золото из улучшений
-            AnimationIndices {
-                first: right_start,
-                last: right_start + PLAYER_SPRITE_FRAMES - 1,
-            },
-            AnimationTimer(Timer::from_seconds(0.1, TimerMode::Repeating)),
-            PlayerAnimation {
-                right_start,
-                left_start,
-                frames: PLAYER_SPRITE_FRAMES,
-                facing: 1,
-            },
-        ))
+    let mut entity_commands = commands.spawn((
+        Sprite {
+            image: texture,
+            texture_atlas: Some(TextureAtlas {
+                layout: texture_atlas_layout,
+                index: right_start,
+            }),
+            ..default()
+        },
+        Transform::from_xyz(0.0, 0.0, 1.0).with_scale(Vec3::splat(PLAYER_SCALE)),
+        Player,
+        player_id,
+        PlayerInputState::default(),
+        Hitbox::from_full_size(PLAYER_FRAME_SIZE * PLAYER_SCALE * PLAYER_HITBOX_SCALE),
+        CollisionLayer::player(),
+        Health::new(base_hp),
+        MovementSpeed(base_speed),
+        Velocity::default(),
+        Team(Team::PLAYER),
+        Experience::new_with_level(starting_level),
+        Gold::new(starting_gold),
+    ));
+
+    entity_commands.insert(AnimationIndices {
+        first: right_start,
+        last: right_start + PLAYER_SPRITE_FRAMES - 1,
+    });
+    entity_commands.insert(AnimationTimer(Timer::from_seconds(
+        0.1,
+        TimerMode::Repeating,
+    )));
+    entity_commands.insert(PlayerAnimation {
+        right_start,
+        left_start,
+        frames: PLAYER_SPRITE_FRAMES,
+        facing: 1,
+    });
+
+    if is_local {
+        entity_commands.insert(LocalPlayer);
+    }
+
+    let player_entity = entity_commands
         .insert(PushbackAttack::default())
         .insert(PushbackAttackCooldown::default())
         .insert(PhysicsPosition(Vec2::ZERO))
@@ -121,6 +127,29 @@ pub fn setup_player(
         .id();
 
     commands.entity(player_entity).add_child(glow_entity);
+    player_entity
+}
+
+/// Система настройки игрока (запускается один раз при старте)
+pub fn setup_player(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
+    meta: Res<MetaProgression>,
+    existing_player: Query<Entity, (With<Player>, With<LocalPlayer>)>,
+) {
+    // Если игрок уже существует, не создаем нового (возврат из LevelUpChoice)
+    if !existing_player.is_empty() {
+        return;
+    }
+    spawn_player_entity(
+        &mut commands,
+        &asset_server,
+        &mut texture_atlas_layouts,
+        &meta,
+        PlayerId(LOCAL_PLAYER_ID),
+        true,
+    );
 }
 
 /// Система настройки камеры
@@ -157,7 +186,7 @@ pub fn setup_camera(mut commands: Commands) {
 /// Система следования камеры за игроком
 pub fn camera_follow_system(
     time: Res<Time>,
-    player_query: Query<&Transform, With<Player>>,
+    player_query: Query<&Transform, (With<Player>, With<LocalPlayer>)>,
     mut camera_query: Query<&mut Transform, (With<Camera>, Without<Player>)>,
     shake: Res<crate::resources::ScreenShake>,
 ) {
@@ -243,12 +272,16 @@ pub fn setup_pets(
     mut commands: Commands,
     upgrade_state: Res<UpgradeState>,
     pet_sprites: Res<crate::resources::PetSpriteSheet>,
-    existing_pets: Query<Entity, With<Pet>>,
+    existing_pets: Query<&PetOwner, With<Pet>>,
+    local_player: Query<&PlayerId, With<LocalPlayer>>,
 ) {
     // Если есть питомцы, значит это не первый запуск (возврат из LevelUpChoice)
     // В этом случае сохраняем существующих питомцев
-    let pet_count = existing_pets.iter().count();
-    if pet_count > 0 {
+    let Ok(local_id) = local_player.single() else {
+        return;
+    };
+    let has_local_pets = existing_pets.iter().any(|owner| owner.0 == local_id.0);
+    if has_local_pets {
         return;
     }
 
@@ -259,6 +292,7 @@ pub fn setup_pets(
         Vec2::ZERO,
         &upgrade_state,
         &pet_sprites,
+        local_id.0,
     );
 }
 
@@ -269,6 +303,7 @@ pub fn spawn_pet(
     position: Vec2,
     upgrades: &UpgradeState,
     pet_sprites: &crate::resources::PetSpriteSheet,
+    owner_id: u32,
 ) {
     let (
         base_damage,
@@ -305,6 +340,7 @@ pub fn spawn_pet(
         },
         Transform::from_xyz(position.x, position.y, 1.0).with_scale(Vec3::splat(pet_scale)),
         Pet { pet_type },
+        PetOwner(owner_id),
         Hitbox::from_full_size(hitbox_size),
         CollisionLayer::pet(),
         AnimationIndices {

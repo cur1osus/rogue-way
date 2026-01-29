@@ -8,8 +8,8 @@ use bevy::prelude::{
 };
 
 use crate::components::{
-    CollisionLayer, Hitbox, PhysicsPosition, Player, PreviousPhysicsPosition, TerrainChunk,
-    TerrainDecoration, TerrainTile, Velocity,
+    CollisionLayer, Hitbox, LocalPlayer, PhysicsPosition, Player, PreviousPhysicsPosition,
+    TerrainChunk, TerrainDecoration, TerrainTile, Velocity,
 };
 use crate::constants::ROCK_HITBOX_SCALE;
 use crate::resources::{TerrainChunks, TerrainConfig, TerrainSprites, TerrainTileset};
@@ -39,7 +39,7 @@ pub fn reset_terrain_chunks(
 
 pub fn terrain_chunk_system(
     mut commands: Commands,
-    player_query: Query<&Transform, With<Player>>,
+    player_query: Query<&Transform, (With<Player>, With<LocalPlayer>)>,
     mut terrain_chunks: ResMut<TerrainChunks>,
     terrain_sprites: Res<TerrainSprites>,
     config: Res<TerrainConfig>,

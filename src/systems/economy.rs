@@ -11,15 +11,19 @@ const GOLD_PICKUP_RADIUS: f32 = 60.0; // Золото подбирается ч�
 /// Система авто-сбора XP гемов и золота
 pub fn pickup_system(
     mut commands: Commands,
-    mut player_query: Query<(&Transform, &mut Gold), With<Player>>,
+    mut player_query: Query<(Entity, &Transform, &mut Gold), With<Player>>,
     pet_query: Query<(&Transform, &Pet)>,
     gem_query: Query<(Entity, &Transform, &XpGem)>,
     gold_query: Query<(Entity, &Transform, &GoldPickup)>,
     mut gain_xp_events: MessageWriter<GainXpEvent>,
 ) {
-    let Ok((player_transform, mut player_gold)) = player_query.single_mut() else {
+    let player_data: Vec<(Entity, Vec2)> = player_query
+        .iter()
+        .map(|(entity, transform, _)| (entity, transform.translation.truncate()))
+        .collect();
+    if player_data.is_empty() {
         return;
-    };
+    }
 
     let mut xp_collectors = Vec::with_capacity(pet_query.iter().size_hint().0);
     for (transform, pet) in pet_query.iter() {
@@ -28,20 +32,22 @@ pub fn pickup_system(
         }
     }
 
-    let player_pos = player_transform.translation.truncate();
+    let player_positions: Vec<Vec2> = player_data.iter().map(|(_, pos)| *pos).collect();
     let xp_pickup_radius_sq = XP_PICKUP_RADIUS * XP_PICKUP_RADIUS;
     let gold_pickup_radius_sq = GOLD_PICKUP_RADIUS * GOLD_PICKUP_RADIUS;
 
     // Подбор XP
     for (gem_entity, gem_transform, gem) in gem_query.iter() {
         let gem_pos = gem_transform.translation.truncate();
-        let distance_sq = player_pos.distance_squared(gem_pos);
-        let picked_by_pet = distance_sq > xp_pickup_radius_sq
+        let picked_by_player = player_positions
+            .iter()
+            .any(|pos| pos.distance_squared(gem_pos) <= xp_pickup_radius_sq);
+        let picked_by_pet = !picked_by_player
             && xp_collectors
                 .iter()
                 .any(|pos| pos.distance_squared(gem_pos) <= xp_pickup_radius_sq);
 
-        if distance_sq <= xp_pickup_radius_sq || picked_by_pet {
+        if picked_by_player || picked_by_pet {
             commands.entity(gem_entity).despawn();
             gain_xp_events.write(GainXpEvent { amount: gem.value });
         }
@@ -50,9 +56,15 @@ pub fn pickup_system(
     // Подбор золота
     for (gold_entity, gold_transform, gold_pickup) in gold_query.iter() {
         let gold_pos = gold_transform.translation.truncate();
-        let distance_sq = player_pos.distance_squared(gold_pos);
-        if distance_sq <= gold_pickup_radius_sq {
-            player_gold.add(gold_pickup.value);
+        let picked_by_player = player_positions
+            .iter()
+            .any(|pos| pos.distance_squared(gold_pos) <= gold_pickup_radius_sq);
+        if picked_by_player {
+            for (entity, _) in player_data.iter() {
+                if let Ok((_entity, _transform, mut gold)) = player_query.get_mut(*entity) {
+                    gold.add(gold_pickup.value);
+                }
+            }
             commands.entity(gold_entity).despawn();
         }
     }
@@ -71,14 +83,17 @@ pub fn gain_xp_system(
     mut level_up_events: MessageWriter<LevelUpEvent>,
 ) {
     for event in gain_xp_events.read() {
-        if let Ok(mut experience) = player_query.single_mut() {
-            let leveled_up = experience.add_xp(event.amount);
-
-            if leveled_up {
-                level_up_events.write(LevelUpEvent {
-                    new_level: experience.level,
-                });
+        let mut leveled_up = false;
+        let mut new_level = 0;
+        for mut experience in player_query.iter_mut() {
+            if experience.add_xp(event.amount) {
+                leveled_up = true;
+                new_level = experience.level;
             }
+        }
+
+        if leveled_up {
+            level_up_events.write(LevelUpEvent { new_level });
         }
     }
 }

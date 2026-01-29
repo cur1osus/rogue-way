@@ -6,10 +6,12 @@ use winit::window::Icon;
 
 mod components;
 mod constants;
+mod network;
 mod resources;
 mod systems;
 mod ui;
 
+use network::*;
 use resources::*;
 use systems::*;
 use ui::*;
@@ -29,6 +31,7 @@ fn main() {
                     ..default()
                 }),
         )
+        .add_plugins(NetworkPlugin)
         // Состояния
         .init_state::<GameState>()
         // События
@@ -42,6 +45,7 @@ fn main() {
         .init_resource::<PlayerDamageFlash>()
         .init_resource::<PhysicsAccumulator>()
         .init_resource::<UiFonts>()
+        .init_resource::<JoinCodeState>()
         .init_resource::<EnemySpriteSheet>()
         .init_resource::<MetaProgression>()
         .init_resource::<PetSpriteSheet>()
@@ -71,6 +75,8 @@ fn main() {
             Update,
             (
                 handle_main_menu_buttons,
+                join_menu_input_system,
+                join_menu_visibility_system,
                 menu_floating_animation_system,
                 menu_button_hover_system,
                 menu_resize_system,
@@ -106,7 +112,11 @@ fn main() {
         // Системы при входе в игру
         .add_systems(
             OnEnter(GameState::Playing),
-            (setup_player, setup_pets, setup_hud, reset_terrain_chunks),
+            (setup_player, setup_pets).run_if(is_authoritative),
+        )
+        .add_systems(
+            OnEnter(GameState::Playing),
+            (setup_hud, reset_terrain_chunks),
         )
         // Системы очистки при переходе в меню/магазин (НЕ при LevelUpChoice!)
         .add_systems(OnEnter(GameState::Shop), cleanup_game_entities)
@@ -116,30 +126,32 @@ fn main() {
         .add_systems(
             Update,
             (
-                // Ввод (обновляет Velocity)
-                input_system,
+                apply_player_input_system,
                 pushback_last_direction_system,
                 pushback_input_system,
-                pushback_ready_glow_system.after(pushback_input_system),
                 pushback_ready_glow_setup_system.before(pushback_ready_glow_system),
-                // AI (обновляет Velocity)
+                pushback_ready_glow_system.after(pushback_input_system),
                 enemy_ai_system,
-                enemy_facing_system,
-                // Физика с fixed timestep (обновляет PhysicsPosition)
                 physics_update_system,
-                // Knockback (обновляет PhysicsPosition)
                 knockback_effect_system,
-                // Интерполяция (обновляет Transform для рендеринга)
+                pet_ai_system,
+                pet_attack_timer_system,
+            )
+                .run_if(in_state(GameState::Playing))
+                .run_if(is_authoritative),
+        )
+        .add_systems(
+            Update,
+            (
+                input_system,
+                enemy_facing_system,
                 interpolation_system,
-                // Визуальные системы
                 player_animation_system,
                 pushback_ready_glow_sync_system.after(player_animation_system),
                 pushback_animation_system,
                 pushback_overlay_system,
                 pushback_cone_visual_system,
-                pet_ai_system,
                 pet_animation_system,
-                pet_attack_timer_system,
             )
                 .run_if(in_state(GameState::Playing)),
         )
@@ -152,8 +164,6 @@ fn main() {
             (
                 spawn_system,
                 attack_timer_tick_system,
-                enemy_animation_system,
-                enemy_death_animation_system,
                 pending_attack_system,
                 collision_system,
                 pet_projectile_attack_system,
@@ -163,6 +173,12 @@ fn main() {
                 damage_system,
                 slow_effect_system,
             )
+                .run_if(in_state(GameState::Playing))
+                .run_if(is_authoritative),
+        )
+        .add_systems(
+            Update,
+            (enemy_animation_system, enemy_death_animation_system)
                 .run_if(in_state(GameState::Playing)),
         )
         .add_systems(
@@ -171,9 +187,13 @@ fn main() {
         )
         .add_systems(
             Update,
+            (pickup_system, gain_xp_system, cleanup_on_death_system)
+                .run_if(in_state(GameState::Playing))
+                .run_if(is_authoritative),
+        )
+        .add_systems(
+            Update,
             (
-                pickup_system,
-                gain_xp_system,
                 gold_highlight_system,
                 gold_animation_system,
                 hit_flash_system,
@@ -184,7 +204,6 @@ fn main() {
                 timed_despawn_system,
                 screen_shake_system,
                 camera_follow_system,
-                cleanup_on_death_system,
             )
                 .run_if(in_state(GameState::Playing)),
         )
@@ -192,13 +211,15 @@ fn main() {
         .add_systems(
             Update,
             (
-                level_up_system,
                 ui_update_system,
                 boss_health_bar_system,
                 update_boss_health_bar_system,
-                auto_save_system,
                 set_window_icon,
             ),
+        )
+        .add_systems(
+            Update,
+            (level_up_system, auto_save_system).run_if(is_authoritative),
         )
         // Системы панели статов (работают только в Playing)
         .add_systems(
@@ -211,9 +232,14 @@ fn main() {
                 dev_panel_system,
                 performance_stats_system,
                 update_stats_panel_system,
-                dev_panel_actions_system,
             )
                 .run_if(in_state(GameState::Playing)),
+        )
+        .add_systems(
+            Update,
+            dev_panel_actions_system
+                .run_if(in_state(GameState::Playing))
+                .run_if(is_authoritative),
         )
         .add_systems(
             Update,
