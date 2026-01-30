@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 
@@ -27,10 +27,18 @@ use crate::ui::{AreaDamageVisualAssets, HitboxVisualsVisible};
 
 pub const DEFAULT_PORT: u16 = 14000;
 pub const LOCAL_PLAYER_ID: u32 = 1;
-const NETWORK_PROTOCOL: u32 = 2;
+const NETWORK_PROTOCOL: u32 = 3;
 const DEFAULT_SNAPSHOT_INTERVAL: f32 = 1.0 / 30.0;
 const DEFAULT_INPUT_INTERVAL: f32 = 1.0 / 60.0;
 const MAX_UDP_PACKET_SIZE: usize = 65507;
+const SNAPSHOT_BUFFER_TARGET: usize = 1;
+const SNAPSHOT_BUFFER_MAX: usize = 32;
+const FX_RESEND_TTL: f32 = 0.25;
+const FX_RESEND_MAX: usize = 256;
+const FX_MAX_EVENTS_PER_PACKET: usize = 64;
+const CLIENT_CORRECTION_RATE: f32 = 10.0;
+const CLIENT_CORRECTION_DEADZONE: f32 = 1.0;
+const CLIENT_CORRECTION_SNAP_DISTANCE: f32 = 120.0;
 
 #[derive(Resource, Clone, Copy, PartialEq, Eq)]
 pub enum NetworkMode {
@@ -192,6 +200,8 @@ pub struct NetworkServer {
     snapshot_timer: Timer,
     snapshot_interval: f32,
     snapshot_tick: u64,
+    fx_seq: u64,
+    fx_resend: VecDeque<FxResendEntry>,
 }
 
 #[derive(Resource)]
@@ -213,8 +223,61 @@ pub struct NetworkEntityMap {
 
 #[derive(Resource, Default)]
 struct NetworkUdpInbox {
-    snapshots: Vec<NetUdpMessage>,
     fx_events: Vec<NetFxEvent>,
+}
+
+#[derive(Clone)]
+struct BufferedSnapshot {
+    tick: u64,
+    interval: f32,
+    players: Vec<PlayerSnapshot>,
+    pets: Vec<PetSnapshot>,
+    enemies: Vec<EnemySnapshot>,
+    projectiles: Vec<ProjectileSnapshot>,
+    xp_gems: Vec<XpSnapshot>,
+    gold: Vec<GoldSnapshot>,
+}
+
+#[derive(Resource)]
+struct NetworkSnapshotBuffer {
+    queue: VecDeque<BufferedSnapshot>,
+    last_received_tick: Option<u64>,
+    target_delay: usize,
+    max_buffer: usize,
+}
+
+impl Default for NetworkSnapshotBuffer {
+    fn default() -> Self {
+        Self {
+            queue: VecDeque::new(),
+            last_received_tick: None,
+            target_delay: SNAPSHOT_BUFFER_TARGET,
+            max_buffer: SNAPSHOT_BUFFER_MAX,
+        }
+    }
+}
+
+#[derive(Resource)]
+struct NetworkFxDeduper {
+    seen: HashSet<u64>,
+    order: VecDeque<u64>,
+    max: usize,
+}
+
+impl Default for NetworkFxDeduper {
+    fn default() -> Self {
+        Self {
+            seen: HashSet::new(),
+            order: VecDeque::new(),
+            max: FX_RESEND_MAX * 4,
+        }
+    }
+}
+
+#[derive(Resource, Default)]
+struct ClientPredictionState {
+    server_pos: Option<Vec2>,
+    server_vel: Option<Vec2>,
 }
 
 #[derive(Resource, Default)]
@@ -348,6 +411,18 @@ pub enum NetFxEvent {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct NetFxEnvelope {
+    pub id: u64,
+    pub event: NetFxEvent,
+}
+
+#[derive(Clone)]
+struct FxResendEntry {
+    envelope: NetFxEnvelope,
+    ttl: f32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum NetMessage {
     Hello {
         protocol: u32,
@@ -379,7 +454,7 @@ pub enum NetUdpMessage {
         gold: Vec<GoldSnapshot>,
     },
     Fx {
-        events: Vec<NetFxEvent>,
+        events: Vec<NetFxEnvelope>,
     },
 }
 
@@ -391,6 +466,9 @@ impl Plugin for NetworkPlugin {
             .init_resource::<NetworkIdAllocator>()
             .init_resource::<NetworkInterpolation>()
             .init_resource::<NetworkUdpInbox>()
+            .init_resource::<NetworkSnapshotBuffer>()
+            .init_resource::<NetworkFxDeduper>()
+            .init_resource::<ClientPredictionState>()
             .add_systems(Update, assign_network_ids_system)
             .add_systems(Update, host_accept_system)
             .add_systems(Update, host_receive_tcp_system)
@@ -407,7 +485,16 @@ impl Plugin for NetworkPlugin {
                 Update,
                 client_apply_fx_system.after(client_receive_udp_system),
             )
-            .add_systems(Update, client_send_input_system)
+            .add_systems(
+                Update,
+                client_send_input_system.after(crate::systems::input_system),
+            )
+            .add_systems(
+                Update,
+                client_prediction_system
+                    .after(crate::systems::input_system)
+                    .after(client_apply_snapshot_system),
+            )
             .add_systems(
                 Update,
                 client_interpolation_tick_system.after(client_apply_snapshot_system),
@@ -456,6 +543,8 @@ pub fn start_host(commands: &mut Commands, port: u16) -> Result<String, String> 
         snapshot_timer: Timer::from_seconds(DEFAULT_SNAPSHOT_INTERVAL, TimerMode::Repeating),
         snapshot_interval: DEFAULT_SNAPSHOT_INTERVAL,
         snapshot_tick: 0,
+        fx_seq: 0,
+        fx_resend: VecDeque::new(),
     });
     commands.insert_resource(NetworkIdAllocator { next_id: 1 });
 
@@ -580,6 +669,20 @@ fn read_udp_messages(
         }
     }
     Ok(messages)
+}
+
+fn record_fx_event(deduper: &mut NetworkFxDeduper, id: u64) -> bool {
+    if deduper.seen.contains(&id) {
+        return false;
+    }
+    deduper.seen.insert(id);
+    deduper.order.push_back(id);
+    if deduper.order.len() > deduper.max {
+        if let Some(oldest) = deduper.order.pop_front() {
+            deduper.seen.remove(&oldest);
+        }
+    }
+    true
 }
 
 fn assign_network_ids_system(
@@ -941,25 +1044,64 @@ fn host_snapshot_system(
 }
 
 fn host_send_fx_system(
+    time: Res<Time>,
     mut server: Option<ResMut<NetworkServer>>,
     mut fx_events: MessageReader<NetFxEvent>,
 ) {
     let Some(mut server) = server else {
         return;
     };
-    if server.udp_clients.is_empty() {
+    let has_clients = !server.udp_clients.is_empty();
+    for event in fx_events.read() {
+        let envelope = NetFxEnvelope {
+            id: server.fx_seq,
+            event: event.clone(),
+        };
+        server.fx_seq = server.fx_seq.wrapping_add(1);
+        server.fx_resend.push_back(FxResendEntry {
+            envelope,
+            ttl: FX_RESEND_TTL,
+        });
+    }
+
+    if !has_clients {
+        server.fx_resend.clear();
         return;
     }
 
-    let events: Vec<NetFxEvent> = fx_events.read().cloned().collect();
-    if events.is_empty() {
+    let dt = time.delta_secs();
+    for entry in server.fx_resend.iter_mut() {
+        entry.ttl -= dt;
+    }
+    while let Some(front) = server.fx_resend.front() {
+        if front.ttl > 0.0 {
+            break;
+        }
+        server.fx_resend.pop_front();
+    }
+
+    while server.fx_resend.len() > FX_RESEND_MAX {
+        server.fx_resend.pop_front();
+    }
+
+    if server.fx_resend.is_empty() {
         return;
     }
 
-    let message = NetUdpMessage::Fx { events };
-    for (player_id, addr) in server.udp_clients.iter() {
-        if let Err(err) = send_udp_message(&server.udp_socket, *addr, &message) {
-            eprintln!("FX send failed for {player_id}: {err}");
+    let events: Vec<NetFxEnvelope> = server
+        .fx_resend
+        .iter()
+        .map(|entry| entry.envelope.clone())
+        .collect();
+
+    for chunk in events.chunks(FX_MAX_EVENTS_PER_PACKET) {
+        let message = NetUdpMessage::Fx {
+            events: chunk.to_vec(),
+        };
+        for (player_id, addr) in server.udp_clients.iter() {
+            if let Err(err) = send_udp_message(&server.udp_socket, *addr, &message) {
+                eprintln!("FX send failed for {player_id}: {err}");
+            }
         }
     }
 }
@@ -968,6 +1110,9 @@ fn client_receive_tcp_system(
     mut commands: Commands,
     mut client: Option<ResMut<NetworkClient>>,
     mut net_interp: ResMut<NetworkInterpolation>,
+    mut snapshot_buffer: ResMut<NetworkSnapshotBuffer>,
+    mut prediction: ResMut<ClientPredictionState>,
+    mut fx_deduper: ResMut<NetworkFxDeduper>,
     player_query: Query<(Entity, &PlayerId), With<Player>>,
 ) {
     let Some(mut client) = client else {
@@ -1009,6 +1154,12 @@ fn client_receive_tcp_system(
                 }
                 net_interp.interval = (snapshot_interval_ms as f32 / 1000.0).max(0.001);
                 net_interp.accumulator = 0.0;
+                snapshot_buffer.queue.clear();
+                snapshot_buffer.last_received_tick = None;
+                prediction.server_pos = None;
+                prediction.server_vel = None;
+                fx_deduper.seen.clear();
+                fx_deduper.order.clear();
 
                 let _ = send_udp_message(
                     &client.udp_socket,
@@ -1035,6 +1186,9 @@ fn client_receive_tcp_system(
 fn client_receive_udp_system(
     mut client: Option<ResMut<NetworkClient>>,
     mut inbox: ResMut<NetworkUdpInbox>,
+    mut snapshot_buffer: ResMut<NetworkSnapshotBuffer>,
+    mut fx_deduper: ResMut<NetworkFxDeduper>,
+    mut net_interp: ResMut<NetworkInterpolation>,
 ) {
     let Some(mut client) = client else {
         return;
@@ -1053,11 +1207,45 @@ fn client_receive_udp_system(
 
     for (_addr, message) in messages {
         match message {
-            message @ NetUdpMessage::Snapshot { .. } => {
-                inbox.snapshots.push(message);
+            NetUdpMessage::Snapshot {
+                tick,
+                interval_ms,
+                players,
+                pets,
+                enemies,
+                projectiles,
+                xp_gems,
+                gold,
+            } => {
+                let interval = (interval_ms as f32 / 1000.0).max(0.001);
+                net_interp.interval = interval;
+                let is_new = snapshot_buffer
+                    .last_received_tick
+                    .map(|last| tick > last)
+                    .unwrap_or(true);
+                if is_new {
+                    snapshot_buffer.last_received_tick = Some(tick);
+                    snapshot_buffer.queue.push_back(BufferedSnapshot {
+                        tick,
+                        interval,
+                        players,
+                        pets,
+                        enemies,
+                        projectiles,
+                        xp_gems,
+                        gold,
+                    });
+                    while snapshot_buffer.queue.len() > snapshot_buffer.max_buffer {
+                        snapshot_buffer.queue.pop_front();
+                    }
+                }
             }
             NetUdpMessage::Fx { events } => {
-                inbox.fx_events.extend(events);
+                for envelope in events {
+                    if record_fx_event(&mut fx_deduper, envelope.id) {
+                        inbox.fx_events.push(envelope.event);
+                    }
+                }
             }
             _ => {}
         }
@@ -1076,7 +1264,8 @@ fn client_apply_snapshot_system(
     pet_sprites: Res<PetSpriteSheet>,
     xp_sprites: Res<XpGemSprites>,
     gold_sprites: Res<GoldSprites>,
-    mut inbox: ResMut<NetworkUdpInbox>,
+    mut snapshot_buffer: ResMut<NetworkSnapshotBuffer>,
+    mut prediction: ResMut<ClientPredictionState>,
     death_anim_query: Query<(), With<DeathAnimation>>,
     entity_query: Query<Entity>,
     mut query_set: ParamSet<(
@@ -1138,257 +1327,292 @@ fn client_apply_snapshot_system(
         return;
     };
     let client_player_id = client.player_id;
-    let snapshots = std::mem::take(&mut inbox.snapshots);
-    if snapshots.is_empty() {
+    if snapshot_buffer.queue.is_empty() {
         return;
     }
 
-    for message in snapshots {
-        match message {
-            NetUdpMessage::Snapshot {
-                players,
-                pets,
-                enemies,
-                projectiles,
-                xp_gems,
-                gold,
-                interval_ms,
-                ..
-            } => {
-                net_interp.accumulator = 0.0;
-                net_interp.interval = (interval_ms as f32 / 1000.0).max(0.001);
-                let mut present_ids: HashSet<u32> = HashSet::new();
+    let entity_map_empty = entity_map.entities.is_empty();
 
-                {
-                    let mut players_query = query_set.p0();
-                    for snapshot in players {
-                        present_ids.insert(snapshot.id);
-                        if let Some(&entity) = entity_map.entities.get(&snapshot.id) {
-                            if let Ok((
-                                _entity,
-                                _net_id,
-                                _player_id,
-                                mut pos,
-                                mut prev,
-                                mut vel,
-                                mut health,
-                                mut speed,
-                                mut xp,
-                                mut gold,
-                            )) = players_query.get_mut(entity)
-                            {
-                                prev.0 = pos.0;
-                                pos.0 = Vec2::new(snapshot.pos[0], snapshot.pos[1]);
-                                vel.0 = Vec2::new(snapshot.vel[0], snapshot.vel[1]);
-                                health.current = snapshot.hp;
-                                health.max = snapshot.hp_max;
-                                speed.0 = snapshot.move_speed;
-                                xp.level = snapshot.level;
-                                xp.current = snapshot.xp;
-                                xp.to_next_level = snapshot.xp_next;
-                                gold.amount = snapshot.gold;
-                            }
+    let mut applied_any = false;
+    let mut apply_snapshot = |snapshot: BufferedSnapshot| -> f32 {
+        let BufferedSnapshot {
+            players,
+            pets,
+            enemies,
+            projectiles,
+            xp_gems,
+            gold,
+            interval,
+            ..
+        } = snapshot;
+        let mut present_ids: HashSet<u32> = HashSet::new();
+
+        {
+            let mut players_query = query_set.p0();
+            for snapshot in players {
+                present_ids.insert(snapshot.id);
+                let is_local = client_player_id == Some(snapshot.player_id);
+                if let Some(&entity) = entity_map.entities.get(&snapshot.id) {
+                    if let Ok((
+                        _entity,
+                        _net_id,
+                        _player_id,
+                        mut pos,
+                        mut prev,
+                        mut vel,
+                        mut health,
+                        mut speed,
+                        mut xp,
+                        mut gold,
+                    )) = players_query.get_mut(entity)
+                    {
+                        if is_local {
+                            health.current = snapshot.hp;
+                            health.max = snapshot.hp_max;
+                            speed.0 = snapshot.move_speed;
+                            xp.level = snapshot.level;
+                            xp.current = snapshot.xp;
+                            xp.to_next_level = snapshot.xp_next;
+                            gold.amount = snapshot.gold;
+                            prediction.server_pos =
+                                Some(Vec2::new(snapshot.pos[0], snapshot.pos[1]));
+                            prediction.server_vel =
+                                Some(Vec2::new(snapshot.vel[0], snapshot.vel[1]));
                         } else {
-                            let player_entity = spawn_player_entity(
-                                &mut commands,
-                                &asset_server,
-                                &mut texture_atlas_layouts,
-                                &meta,
-                                PlayerId(snapshot.player_id),
-                                false,
-                            );
-                            commands
-                                .entity(player_entity)
-                                .insert(NetworkId(snapshot.id))
-                                .insert(Health {
-                                    current: snapshot.hp,
-                                    max: snapshot.hp_max,
-                                })
-                                .insert(MovementSpeed(snapshot.move_speed))
-                                .insert(Experience {
-                                    current: snapshot.xp,
-                                    to_next_level: snapshot.xp_next,
-                                    level: snapshot.level,
-                                })
-                                .insert(Gold {
-                                    amount: snapshot.gold,
-                                })
-                                .insert(PhysicsPosition(Vec2::new(
-                                    snapshot.pos[0],
-                                    snapshot.pos[1],
-                                )))
-                                .insert(PreviousPhysicsPosition(Vec2::new(
-                                    snapshot.pos[0],
-                                    snapshot.pos[1],
-                                )))
-                                .insert(Velocity(Vec2::new(snapshot.vel[0], snapshot.vel[1])));
-
-                            if client_player_id == Some(snapshot.player_id) {
-                                commands.entity(player_entity).insert(LocalPlayer);
-                            } else {
-                                commands.entity(player_entity).insert(RemotePlayer);
-                            }
-
-                            entity_map.entities.insert(snapshot.id, player_entity);
+                            prev.0 = pos.0;
+                            pos.0 = Vec2::new(snapshot.pos[0], snapshot.pos[1]);
+                            vel.0 = Vec2::new(snapshot.vel[0], snapshot.vel[1]);
+                            health.current = snapshot.hp;
+                            health.max = snapshot.hp_max;
+                            speed.0 = snapshot.move_speed;
+                            xp.level = snapshot.level;
+                            xp.current = snapshot.xp;
+                            xp.to_next_level = snapshot.xp_next;
+                            gold.amount = snapshot.gold;
                         }
                     }
-                }
+                } else {
+                    let player_entity = spawn_player_entity(
+                        &mut commands,
+                        &asset_server,
+                        &mut texture_atlas_layouts,
+                        &meta,
+                        PlayerId(snapshot.player_id),
+                        false,
+                    );
+                    commands
+                        .entity(player_entity)
+                        .insert(NetworkId(snapshot.id))
+                        .insert(Health {
+                            current: snapshot.hp,
+                            max: snapshot.hp_max,
+                        })
+                        .insert(MovementSpeed(snapshot.move_speed))
+                        .insert(Experience {
+                            current: snapshot.xp,
+                            to_next_level: snapshot.xp_next,
+                            level: snapshot.level,
+                        })
+                        .insert(Gold {
+                            amount: snapshot.gold,
+                        })
+                        .insert(PhysicsPosition(Vec2::new(snapshot.pos[0], snapshot.pos[1])))
+                        .insert(PreviousPhysicsPosition(Vec2::new(
+                            snapshot.pos[0],
+                            snapshot.pos[1],
+                        )))
+                        .insert(Velocity(Vec2::new(snapshot.vel[0], snapshot.vel[1])));
 
-                {
-                    let mut pets_query = query_set.p2();
-                    for snapshot in pets {
-                        present_ids.insert(snapshot.id);
-                        if let Some(&entity) = entity_map.entities.get(&snapshot.id) {
-                            if let Ok((_entity, _net_id, mut pos, mut prev, mut vel)) =
-                                pets_query.get_mut(entity)
-                            {
-                                prev.0 = pos.0;
-                                pos.0 = Vec2::new(snapshot.pos[0], snapshot.pos[1]);
-                                vel.0 = Vec2::new(snapshot.vel[0], snapshot.vel[1]);
-                            }
-                        } else if let Some(pet_type) = pet_type_from_u8(snapshot.pet_type) {
-                            let entity = spawn_remote_pet(
-                                &mut commands,
-                                &pet_sprites,
-                                pet_type,
-                                Vec2::new(snapshot.pos[0], snapshot.pos[1]),
-                                snapshot.owner_id,
-                            );
-                            commands
-                                .entity(entity)
-                                .insert(NetworkId(snapshot.id))
-                                .insert(Velocity(Vec2::new(snapshot.vel[0], snapshot.vel[1])));
-                            entity_map.entities.insert(snapshot.id, entity);
-                        }
+                    if is_local {
+                        commands.entity(player_entity).insert(LocalPlayer);
+                        prediction.server_pos = Some(Vec2::new(snapshot.pos[0], snapshot.pos[1]));
+                        prediction.server_vel = Some(Vec2::new(snapshot.vel[0], snapshot.vel[1]));
+                    } else {
+                        commands.entity(player_entity).insert(RemotePlayer);
                     }
-                }
 
-                {
-                    let mut enemies_query = query_set.p3();
-                    for snapshot in enemies {
-                        present_ids.insert(snapshot.id);
-                        if let Some(&entity) = entity_map.entities.get(&snapshot.id) {
-                            if let Ok((_entity, _net_id, mut pos, mut prev, mut vel, mut health)) =
-                                enemies_query.get_mut(entity)
-                            {
-                                prev.0 = pos.0;
-                                pos.0 = Vec2::new(snapshot.pos[0], snapshot.pos[1]);
-                                vel.0 = Vec2::new(snapshot.vel[0], snapshot.vel[1]);
-                                health.current = snapshot.hp;
-                                health.max = snapshot.hp_max;
-                            }
-                        } else if let Some(enemy_type) = enemy_type_from_u8(snapshot.enemy_type) {
-                            let boss_type = snapshot.boss_type.and_then(boss_type_from_u8);
-                            let entity = spawn_remote_enemy(
-                                &mut commands,
-                                &enemy_sprites,
-                                enemy_type,
-                                boss_type,
-                                Vec2::new(snapshot.pos[0], snapshot.pos[1]),
-                                snapshot.hp,
-                                snapshot.hp_max,
-                            );
-                            commands
-                                .entity(entity)
-                                .insert(NetworkId(snapshot.id))
-                                .insert(Velocity(Vec2::new(snapshot.vel[0], snapshot.vel[1])));
-                            entity_map.entities.insert(snapshot.id, entity);
-                        }
-                    }
-                }
-
-                {
-                    let mut projectile_query = query_set.p4();
-                    for snapshot in projectiles {
-                        present_ids.insert(snapshot.id);
-                        if let Some(&entity) = entity_map.entities.get(&snapshot.id) {
-                            if let Ok((_entity, _net_id, mut pos, mut prev, mut vel)) =
-                                projectile_query.get_mut(entity)
-                            {
-                                prev.0 = pos.0;
-                                pos.0 = Vec2::new(snapshot.pos[0], snapshot.pos[1]);
-                                vel.0 = Vec2::new(snapshot.vel[0], snapshot.vel[1]);
-                            }
-                        } else {
-                            let entity = spawn_remote_projectile(
-                                &mut commands,
-                                Vec2::new(snapshot.pos[0], snapshot.pos[1]),
-                            );
-                            commands
-                                .entity(entity)
-                                .insert(NetworkId(snapshot.id))
-                                .insert(Velocity(Vec2::new(snapshot.vel[0], snapshot.vel[1])));
-                            entity_map.entities.insert(snapshot.id, entity);
-                        }
-                    }
-                }
-
-                {
-                    let mut xp_query = query_set.p5();
-                    for snapshot in xp_gems {
-                        present_ids.insert(snapshot.id);
-                        if let Some(&entity) = entity_map.entities.get(&snapshot.id) {
-                            if let Ok((_entity, _net_id, mut transform)) = xp_query.get_mut(entity)
-                            {
-                                transform.translation.x = snapshot.pos[0];
-                                transform.translation.y = snapshot.pos[1];
-                            }
-                        } else {
-                            let entity = spawn_remote_xp(
-                                &mut commands,
-                                &xp_sprites,
-                                Vec2::new(snapshot.pos[0], snapshot.pos[1]),
-                                snapshot.value,
-                            );
-                            commands.entity(entity).insert(NetworkId(snapshot.id));
-                            entity_map.entities.insert(snapshot.id, entity);
-                        }
-                    }
-                }
-
-                {
-                    let mut gold_query = query_set.p6();
-                    for snapshot in gold {
-                        present_ids.insert(snapshot.id);
-                        if let Some(&entity) = entity_map.entities.get(&snapshot.id) {
-                            if let Ok((_entity, _net_id, mut transform)) =
-                                gold_query.get_mut(entity)
-                            {
-                                transform.translation.x = snapshot.pos[0];
-                                transform.translation.y = snapshot.pos[1];
-                            }
-                        } else {
-                            let entity = spawn_remote_gold(
-                                &mut commands,
-                                &gold_sprites,
-                                Vec2::new(snapshot.pos[0], snapshot.pos[1]),
-                                snapshot.value,
-                            );
-                            commands.entity(entity).insert(NetworkId(snapshot.id));
-                            entity_map.entities.insert(snapshot.id, entity);
-                        }
-                    }
-                }
-
-                let mut to_remove = Vec::new();
-                for (id, entity) in entity_map.entities.iter() {
-                    if !present_ids.contains(id) {
-                        if death_anim_query.get(*entity).is_ok() {
-                            continue;
-                        }
-                        if entity_query.get(*entity).is_err() {
-                            to_remove.push(*id);
-                            continue;
-                        }
-                        commands.entity(*entity).despawn();
-                        to_remove.push(*id);
-                    }
-                }
-                for id in to_remove {
-                    entity_map.entities.remove(&id);
+                    entity_map.entities.insert(snapshot.id, player_entity);
                 }
             }
-            _ => {}
+        }
+
+        {
+            let mut pets_query = query_set.p2();
+            for snapshot in pets {
+                present_ids.insert(snapshot.id);
+                if let Some(&entity) = entity_map.entities.get(&snapshot.id) {
+                    if let Ok((_entity, _net_id, mut pos, mut prev, mut vel)) =
+                        pets_query.get_mut(entity)
+                    {
+                        prev.0 = pos.0;
+                        pos.0 = Vec2::new(snapshot.pos[0], snapshot.pos[1]);
+                        vel.0 = Vec2::new(snapshot.vel[0], snapshot.vel[1]);
+                    }
+                } else if let Some(pet_type) = pet_type_from_u8(snapshot.pet_type) {
+                    let entity = spawn_remote_pet(
+                        &mut commands,
+                        &pet_sprites,
+                        pet_type,
+                        Vec2::new(snapshot.pos[0], snapshot.pos[1]),
+                        snapshot.owner_id,
+                    );
+                    commands
+                        .entity(entity)
+                        .insert(NetworkId(snapshot.id))
+                        .insert(Velocity(Vec2::new(snapshot.vel[0], snapshot.vel[1])));
+                    entity_map.entities.insert(snapshot.id, entity);
+                }
+            }
+        }
+
+        {
+            let mut enemies_query = query_set.p3();
+            for snapshot in enemies {
+                present_ids.insert(snapshot.id);
+                if let Some(&entity) = entity_map.entities.get(&snapshot.id) {
+                    if let Ok((_entity, _net_id, mut pos, mut prev, mut vel, mut health)) =
+                        enemies_query.get_mut(entity)
+                    {
+                        prev.0 = pos.0;
+                        pos.0 = Vec2::new(snapshot.pos[0], snapshot.pos[1]);
+                        vel.0 = Vec2::new(snapshot.vel[0], snapshot.vel[1]);
+                        health.current = snapshot.hp;
+                        health.max = snapshot.hp_max;
+                    }
+                } else if let Some(enemy_type) = enemy_type_from_u8(snapshot.enemy_type) {
+                    let boss_type = snapshot.boss_type.and_then(boss_type_from_u8);
+                    let entity = spawn_remote_enemy(
+                        &mut commands,
+                        &enemy_sprites,
+                        enemy_type,
+                        boss_type,
+                        Vec2::new(snapshot.pos[0], snapshot.pos[1]),
+                        snapshot.hp,
+                        snapshot.hp_max,
+                    );
+                    commands
+                        .entity(entity)
+                        .insert(NetworkId(snapshot.id))
+                        .insert(Velocity(Vec2::new(snapshot.vel[0], snapshot.vel[1])));
+                    entity_map.entities.insert(snapshot.id, entity);
+                }
+            }
+        }
+
+        {
+            let mut projectile_query = query_set.p4();
+            for snapshot in projectiles {
+                present_ids.insert(snapshot.id);
+                if let Some(&entity) = entity_map.entities.get(&snapshot.id) {
+                    if let Ok((_entity, _net_id, mut pos, mut prev, mut vel)) =
+                        projectile_query.get_mut(entity)
+                    {
+                        prev.0 = pos.0;
+                        pos.0 = Vec2::new(snapshot.pos[0], snapshot.pos[1]);
+                        vel.0 = Vec2::new(snapshot.vel[0], snapshot.vel[1]);
+                    }
+                } else {
+                    let entity = spawn_remote_projectile(
+                        &mut commands,
+                        Vec2::new(snapshot.pos[0], snapshot.pos[1]),
+                    );
+                    commands
+                        .entity(entity)
+                        .insert(NetworkId(snapshot.id))
+                        .insert(Velocity(Vec2::new(snapshot.vel[0], snapshot.vel[1])));
+                    entity_map.entities.insert(snapshot.id, entity);
+                }
+            }
+        }
+
+        {
+            let mut xp_query = query_set.p5();
+            for snapshot in xp_gems {
+                present_ids.insert(snapshot.id);
+                if let Some(&entity) = entity_map.entities.get(&snapshot.id) {
+                    if let Ok((_entity, _net_id, mut transform)) = xp_query.get_mut(entity) {
+                        transform.translation.x = snapshot.pos[0];
+                        transform.translation.y = snapshot.pos[1];
+                    }
+                } else {
+                    let entity = spawn_remote_xp(
+                        &mut commands,
+                        &xp_sprites,
+                        Vec2::new(snapshot.pos[0], snapshot.pos[1]),
+                        snapshot.value,
+                    );
+                    commands.entity(entity).insert(NetworkId(snapshot.id));
+                    entity_map.entities.insert(snapshot.id, entity);
+                }
+            }
+        }
+
+        {
+            let mut gold_query = query_set.p6();
+            for snapshot in gold {
+                present_ids.insert(snapshot.id);
+                if let Some(&entity) = entity_map.entities.get(&snapshot.id) {
+                    if let Ok((_entity, _net_id, mut transform)) = gold_query.get_mut(entity) {
+                        transform.translation.x = snapshot.pos[0];
+                        transform.translation.y = snapshot.pos[1];
+                    }
+                } else {
+                    let entity = spawn_remote_gold(
+                        &mut commands,
+                        &gold_sprites,
+                        Vec2::new(snapshot.pos[0], snapshot.pos[1]),
+                        snapshot.value,
+                    );
+                    commands.entity(entity).insert(NetworkId(snapshot.id));
+                    entity_map.entities.insert(snapshot.id, entity);
+                }
+            }
+        }
+
+        let mut to_remove = Vec::new();
+        for (id, entity) in entity_map.entities.iter() {
+            if !present_ids.contains(id) {
+                if death_anim_query.get(*entity).is_ok() {
+                    continue;
+                }
+                if entity_query.get(*entity).is_err() {
+                    to_remove.push(*id);
+                    continue;
+                }
+                commands.entity(*entity).despawn();
+                to_remove.push(*id);
+            }
+        }
+        for id in to_remove {
+            entity_map.entities.remove(&id);
+        }
+
+        interval
+    };
+
+    while net_interp.accumulator >= net_interp.interval
+        && snapshot_buffer.queue.len() > snapshot_buffer.target_delay
+    {
+        if let Some(snapshot) = snapshot_buffer.queue.pop_front() {
+            let interval = apply_snapshot(snapshot).max(0.001);
+            if net_interp.accumulator >= interval {
+                net_interp.accumulator -= interval;
+            } else {
+                net_interp.accumulator = 0.0;
+            }
+            net_interp.interval = interval;
+            applied_any = true;
+        }
+    }
+
+    if !applied_any
+        && entity_map_empty
+        && snapshot_buffer.queue.len() > snapshot_buffer.target_delay
+    {
+        if let Some(snapshot) = snapshot_buffer.queue.pop_front() {
+            let interval = apply_snapshot(snapshot).max(0.001);
+            net_interp.interval = interval;
+            net_interp.accumulator = 0.0;
         }
     }
 }
@@ -1470,6 +1694,62 @@ fn client_send_input_system(
         );
         input_state.pushback = false;
     }
+}
+
+fn client_prediction_system(
+    time: Res<Time>,
+    mode: Option<Res<NetworkMode>>,
+    net_interp: Res<NetworkInterpolation>,
+    prediction: Res<ClientPredictionState>,
+    mut query: Query<
+        (
+            &PlayerInputState,
+            &MovementSpeed,
+            &mut Velocity,
+            &mut PhysicsPosition,
+            &mut PreviousPhysicsPosition,
+            &mut Transform,
+        ),
+        With<LocalPlayer>,
+    >,
+) {
+    if !matches!(mode.map(|m| *m), Some(NetworkMode::Client)) {
+        return;
+    }
+    let dt = time.delta_secs();
+    if dt <= 0.0 {
+        return;
+    }
+    let Ok((input_state, speed, mut velocity, mut pos, mut prev, mut transform)) =
+        query.single_mut()
+    else {
+        return;
+    };
+
+    prev.0 = pos.0;
+    velocity.0 = input_state.movement * speed.0;
+    pos.0 += velocity.0 * dt;
+
+    if let Some(server_pos) = prediction.server_pos {
+        let projected_time =
+            (net_interp.accumulator + dt).min(net_interp.interval + net_interp.max_extrapolation);
+        let target_pos = if let Some(server_vel) = prediction.server_vel {
+            server_pos + server_vel * projected_time
+        } else {
+            server_pos
+        };
+        let error = target_pos - pos.0;
+        let error_len = error.length();
+        if error_len > CLIENT_CORRECTION_SNAP_DISTANCE {
+            pos.0 = target_pos;
+        } else if error_len > CLIENT_CORRECTION_DEADZONE {
+            let t = 1.0 - (-CLIENT_CORRECTION_RATE * dt).exp();
+            pos.0 += error * t;
+        }
+    }
+
+    transform.translation.x = pos.0.x;
+    transform.translation.y = pos.0.y;
 }
 
 fn client_interpolation_tick_system(

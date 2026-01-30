@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::components::{PhysicsPosition, PreviousPhysicsPosition, Velocity};
+use crate::components::{LocalPlayer, PhysicsPosition, PreviousPhysicsPosition, Velocity};
 use crate::network::{NetworkInterpolation, NetworkMode};
 use crate::resources::{PhysicsAccumulator, FIXED_TIMESTEP};
 
@@ -15,6 +15,7 @@ pub fn interpolation_system(
             &PreviousPhysicsPosition,
             Option<&Velocity>,
             &mut Transform,
+            Option<&LocalPlayer>,
         ),
         Without<ChildOf>,
     >,
@@ -30,7 +31,10 @@ pub fn interpolation_system(
         (alpha, 0.0)
     };
 
-    for (physics_pos, prev_pos, velocity, mut transform) in query.iter_mut() {
+    for (physics_pos, prev_pos, velocity, mut transform, local_player) in query.iter_mut() {
+        if is_client && local_player.is_some() {
+            continue;
+        }
         // Линейная интерполяция между предыдущей и текущей физической позицией
         let mut interpolated = prev_pos.0.lerp(physics_pos.0, alpha);
         if is_client {
