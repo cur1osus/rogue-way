@@ -6,19 +6,31 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::components::{
-    Enemy, GoldPickup, Health, MovementSpeed, Player, PlayerId, PlayerInputState, Projectile, XpGem,
+    DeathAnimation, Enemy, FloatingText, GoldPickup, Health, HitFlash, Hitbox, MovementSpeed,
+    Player, PlayerId, PlayerInputState, Projectile, XpGem,
 };
 use crate::components::{Experience, Gold};
 use crate::components::{LocalPlayer, RemotePlayer};
 use crate::components::{Pet, PetOwner, Velocity};
 use crate::components::{PhysicsPosition, PreviousPhysicsPosition};
-use crate::constants::{ENEMY_HITBOX_SCALE, GOLD_SCALE, XP_GEM_SCALE};
-use crate::resources::{EnemySpriteSheet, GoldSprites, PetSpriteSheet, XpGemSprites};
+use crate::constants::{
+    DAMAGE_TEXT_DURATION, ENEMY_HITBOX_SCALE, GOLD_SCALE, UI_FONT_SCALE, XP_GEM_SCALE,
+};
+use crate::resources::{
+    EnemySpriteSheet, GoldSprites, PetSpriteSheet, PlayerDamageFlash, ScreenShake, UiFonts,
+    XpGemSprites,
+};
 use crate::systems::player::spawn_pet;
 use crate::systems::player::spawn_player_entity;
+use crate::systems::{spawn_area_damage_visual, spawn_hit_particles, spawn_slime_heal_effect};
+use crate::ui::{AreaDamageVisualAssets, HitboxVisualsVisible};
 
 pub const DEFAULT_PORT: u16 = 14000;
 pub const LOCAL_PLAYER_ID: u32 = 1;
+const NETWORK_PROTOCOL: u32 = 2;
+const DEFAULT_SNAPSHOT_INTERVAL: f32 = 1.0 / 30.0;
+const DEFAULT_INPUT_INTERVAL: f32 = 1.0 / 60.0;
+const MAX_UDP_PACKET_SIZE: usize = 65507;
 
 #[derive(Resource, Clone, Copy, PartialEq, Eq)]
 pub enum NetworkMode {
@@ -33,28 +45,176 @@ impl Default for NetworkMode {
     }
 }
 
+fn apply_net_fx_events(
+    commands: &mut Commands,
+    events: Vec<NetFxEvent>,
+    entity_map: &NetworkEntityMap,
+    player_query: &Query<(), With<Player>>,
+    hitbox_query: &Query<&Hitbox>,
+    transform_query: &Query<&Transform>,
+    sprite_query: &mut Query<(Entity, &mut Sprite, Option<&mut HitFlash>)>,
+    ui_fonts: &UiFonts,
+    player_damage_flash: &mut PlayerDamageFlash,
+    screen_shake: &mut ScreenShake,
+    meshes: &mut Assets<Mesh>,
+    area_visuals: &AreaDamageVisualAssets,
+    hitbox_visuals: &HitboxVisualsVisible,
+    pet_sprites: &PetSpriteSheet,
+    local_player_id: Option<u32>,
+) {
+    for event in events {
+        match event {
+            NetFxEvent::Hit { target_id, damage } => {
+                let Some(&entity) = entity_map.entities.get(&target_id) else {
+                    continue;
+                };
+                let Ok(transform) = transform_query.get(entity) else {
+                    continue;
+                };
+
+                let is_player = player_query.get(entity).is_ok();
+                let damage_color = if is_player {
+                    Color::srgb(1.0, 0.1, 0.1)
+                } else {
+                    Color::srgb(1.0, 0.9, 0.2)
+                };
+                let text_offset_y = if is_player {
+                    hitbox_query
+                        .get(entity)
+                        .map(|hitbox| hitbox.half_size.y + 12.0)
+                        .unwrap_or(40.0)
+                } else {
+                    12.0
+                };
+                let font_size = (if is_player { 20.0 } else { 16.0 }) * UI_FONT_SCALE;
+
+                commands.spawn((
+                    Text2d::new(format!("-{:.0}", damage)),
+                    TextFont {
+                        font: ui_fonts.main.clone(),
+                        font_size,
+                        ..default()
+                    },
+                    TextColor(damage_color),
+                    TextLayout::new_with_justify(Justify::Center),
+                    Transform::from_xyz(
+                        transform.translation.x,
+                        transform.translation.y + text_offset_y,
+                        5.0,
+                    ),
+                    FloatingText {
+                        timer: Timer::from_seconds(DAMAGE_TEXT_DURATION, TimerMode::Once),
+                        velocity: Vec2::new(0.0, 40.0),
+                    },
+                ));
+
+                if let Ok((entity, mut sprite, hit_flash_opt)) = sprite_query.get_mut(entity) {
+                    if let Some(mut hit_flash) = hit_flash_opt {
+                        sprite.color = Color::WHITE;
+                        hit_flash.timer.reset();
+                    } else {
+                        let original_color = sprite.color;
+                        sprite.color = Color::WHITE;
+                        commands
+                            .entity(entity)
+                            .insert(HitFlash::new(0.1, original_color));
+                    }
+                }
+            }
+            NetFxEvent::HitParticles { pos, color, count } => {
+                let fx_color = Color::srgba(color[0], color[1], color[2], color[3]);
+                spawn_hit_particles(commands, Vec2::new(pos[0], pos[1]), fx_color, count);
+            }
+            NetFxEvent::SlimeHeal { pos } => {
+                spawn_slime_heal_effect(commands, Vec2::new(pos[0], pos[1]), pet_sprites);
+            }
+            NetFxEvent::AreaDamage {
+                pos,
+                radius,
+                dir,
+                cone_angle,
+            } => {
+                if hitbox_visuals.0 {
+                    spawn_area_damage_visual(
+                        commands,
+                        meshes,
+                        area_visuals,
+                        Vec2::new(pos[0], pos[1]),
+                        radius,
+                        Vec2::new(dir[0], dir[1]),
+                        cone_angle,
+                    );
+                }
+            }
+            NetFxEvent::DeathAnimation {
+                target_id,
+                duration,
+            } => {
+                if let Some(&entity) = entity_map.entities.get(&target_id) {
+                    commands
+                        .entity(entity)
+                        .insert(DeathAnimation::new(duration))
+                        .insert(Velocity(Vec2::ZERO));
+                }
+            }
+            NetFxEvent::ScreenShake {
+                player_id,
+                intensity,
+                duration,
+            } => {
+                if local_player_id == Some(player_id) {
+                    screen_shake.trigger(intensity, duration);
+                }
+            }
+            NetFxEvent::PlayerDamageFlash {
+                player_id,
+                intensity,
+                duration,
+            } => {
+                if local_player_id == Some(player_id) {
+                    player_damage_flash.trigger(intensity, duration);
+                }
+            }
+        }
+    }
+}
+
 #[derive(Resource)]
 pub struct NetworkServer {
     listener: TcpListener,
     clients: Vec<ClientConnection>,
+    udp_socket: UdpSocket,
+    udp_clients: HashMap<u32, SocketAddr>,
+    udp_buffer: Vec<u8>,
     pub join_code: String,
     pub port: u16,
     next_player_id: u32,
     snapshot_timer: Timer,
+    snapshot_interval: f32,
+    snapshot_tick: u64,
 }
 
 #[derive(Resource)]
 pub struct NetworkClient {
     stream: TcpStream,
+    udp_socket: UdpSocket,
     buffer: Vec<u8>,
+    udp_buffer: Vec<u8>,
     pub server_addr: SocketAddr,
     pub player_id: Option<u32>,
     input_timer: Timer,
+    udp_ready: bool,
 }
 
 #[derive(Resource, Default)]
 pub struct NetworkEntityMap {
     pub entities: HashMap<u32, Entity>,
+}
+
+#[derive(Resource, Default)]
+struct NetworkUdpInbox {
+    snapshots: Vec<NetUdpMessage>,
+    fx_events: Vec<NetFxEvent>,
 }
 
 #[derive(Resource, Default)]
@@ -64,6 +224,23 @@ pub struct NetworkIdAllocator {
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NetworkId(pub u32);
+
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct NetworkInterpolation {
+    pub accumulator: f32,
+    pub interval: f32,
+    pub max_extrapolation: f32,
+}
+
+impl Default for NetworkInterpolation {
+    fn default() -> Self {
+        Self {
+            accumulator: 0.0,
+            interval: DEFAULT_SNAPSHOT_INTERVAL,
+            max_extrapolation: 0.1,
+        }
+    }
+}
 
 #[derive(Debug)]
 struct ClientConnection {
@@ -134,12 +311,57 @@ pub struct GoldSnapshot {
     pub value: u32,
 }
 
+#[derive(Message, Serialize, Deserialize, Debug, Clone)]
+pub enum NetFxEvent {
+    Hit {
+        target_id: u32,
+        damage: f32,
+    },
+    HitParticles {
+        pos: [f32; 2],
+        color: [f32; 4],
+        count: u32,
+    },
+    SlimeHeal {
+        pos: [f32; 2],
+    },
+    AreaDamage {
+        pos: [f32; 2],
+        radius: f32,
+        dir: [f32; 2],
+        cone_angle: f32,
+    },
+    DeathAnimation {
+        target_id: u32,
+        duration: f32,
+    },
+    ScreenShake {
+        player_id: u32,
+        intensity: f32,
+        duration: f32,
+    },
+    PlayerDamageFlash {
+        player_id: u32,
+        intensity: f32,
+        duration: f32,
+    },
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum NetMessage {
     Hello {
         protocol: u32,
     },
     Welcome {
+        player_id: u32,
+        udp_port: u16,
+        snapshot_interval_ms: u16,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum NetUdpMessage {
+    Hello {
         player_id: u32,
     },
     Input {
@@ -148,12 +370,16 @@ pub enum NetMessage {
     },
     Snapshot {
         tick: u64,
+        interval_ms: u16,
         players: Vec<PlayerSnapshot>,
         pets: Vec<PetSnapshot>,
         enemies: Vec<EnemySnapshot>,
         projectiles: Vec<ProjectileSnapshot>,
         xp_gems: Vec<XpSnapshot>,
         gold: Vec<GoldSnapshot>,
+    },
+    Fx {
+        events: Vec<NetFxEvent>,
     },
 }
 
@@ -163,12 +389,29 @@ impl Plugin for NetworkPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<NetworkMode>()
             .init_resource::<NetworkIdAllocator>()
+            .init_resource::<NetworkInterpolation>()
+            .init_resource::<NetworkUdpInbox>()
             .add_systems(Update, assign_network_ids_system)
             .add_systems(Update, host_accept_system)
-            .add_systems(Update, host_receive_system)
+            .add_systems(Update, host_receive_tcp_system)
+            .add_systems(Update, host_receive_udp_system)
             .add_systems(Update, host_snapshot_system)
-            .add_systems(Update, client_receive_system)
-            .add_systems(Update, client_send_input_system);
+            .add_systems(Update, host_send_fx_system)
+            .add_systems(Update, client_receive_tcp_system)
+            .add_systems(Update, client_receive_udp_system)
+            .add_systems(
+                Update,
+                client_apply_snapshot_system.after(client_receive_udp_system),
+            )
+            .add_systems(
+                Update,
+                client_apply_fx_system.after(client_receive_udp_system),
+            )
+            .add_systems(Update, client_send_input_system)
+            .add_systems(
+                Update,
+                client_interpolation_tick_system.after(client_apply_snapshot_system),
+            );
     }
 }
 
@@ -193,16 +436,26 @@ pub fn start_host(commands: &mut Commands, port: u16) -> Result<String, String> 
     listener
         .set_nonblocking(true)
         .map_err(|err| format!("Failed to set non-blocking: {err}"))?;
+    let udp_socket = UdpSocket::bind(("0.0.0.0", port))
+        .map_err(|err| format!("Failed to bind UDP server: {err}"))?;
+    udp_socket
+        .set_nonblocking(true)
+        .map_err(|err| format!("Failed to set UDP non-blocking: {err}"))?;
 
     let join_code = build_join_code(port);
     commands.insert_resource(NetworkMode::Host);
     commands.insert_resource(NetworkServer {
         listener,
         clients: Vec::new(),
+        udp_socket,
+        udp_clients: HashMap::new(),
+        udp_buffer: vec![0; MAX_UDP_PACKET_SIZE],
         join_code: join_code.clone(),
         port,
         next_player_id: LOCAL_PLAYER_ID + 1,
-        snapshot_timer: Timer::from_seconds(0.066, TimerMode::Repeating),
+        snapshot_timer: Timer::from_seconds(DEFAULT_SNAPSHOT_INTERVAL, TimerMode::Repeating),
+        snapshot_interval: DEFAULT_SNAPSHOT_INTERVAL,
+        snapshot_tick: 0,
     });
     commands.insert_resource(NetworkIdAllocator { next_id: 1 });
 
@@ -214,15 +467,34 @@ pub fn start_client(commands: &mut Commands, addr: SocketAddr) -> Result<(), Str
     stream
         .set_nonblocking(true)
         .map_err(|err| format!("Failed to set non-blocking: {err}"))?;
+    stream
+        .set_nodelay(true)
+        .map_err(|err| format!("Failed to set TCP nodelay: {err}"))?;
+
+    let udp_socket = UdpSocket::bind("0.0.0.0:0").map_err(|err| format!("UDP bind: {err}"))?;
+    udp_socket
+        .set_nonblocking(true)
+        .map_err(|err| format!("Failed to set UDP non-blocking: {err}"))?;
+    udp_socket
+        .connect(addr)
+        .map_err(|err| format!("UDP connect failed: {err}"))?;
 
     let mut client = NetworkClient {
         stream,
+        udp_socket,
         buffer: Vec::new(),
+        udp_buffer: vec![0; MAX_UDP_PACKET_SIZE],
         server_addr: addr,
         player_id: None,
-        input_timer: Timer::from_seconds(0.033, TimerMode::Repeating),
+        input_timer: Timer::from_seconds(DEFAULT_INPUT_INTERVAL, TimerMode::Repeating),
+        udp_ready: false,
     };
-    let _ = send_message(&mut client.stream, &NetMessage::Hello { protocol: 1 });
+    let _ = send_message(
+        &mut client.stream,
+        &NetMessage::Hello {
+            protocol: NETWORK_PROTOCOL,
+        },
+    );
 
     commands.insert_resource(NetworkMode::Client);
     commands.insert_resource(client);
@@ -276,6 +548,36 @@ fn read_messages(stream: &mut TcpStream, buffer: &mut Vec<u8>) -> std::io::Resul
         let msg: NetMessage = bincode::deserialize(&payload)
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
         messages.push(msg);
+    }
+    Ok(messages)
+}
+
+fn send_udp_message(
+    socket: &UdpSocket,
+    addr: SocketAddr,
+    message: &NetUdpMessage,
+) -> std::io::Result<()> {
+    let payload = bincode::serialize(message)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+    let _ = socket.send_to(&payload, addr)?;
+    Ok(())
+}
+
+fn read_udp_messages(
+    socket: &UdpSocket,
+    buffer: &mut [u8],
+) -> std::io::Result<Vec<(SocketAddr, NetUdpMessage)>> {
+    let mut messages = Vec::new();
+    loop {
+        match socket.recv_from(buffer) {
+            Ok((size, addr)) => {
+                let msg: NetUdpMessage = bincode::deserialize(&buffer[..size])
+                    .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+                messages.push((addr, msg));
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(err) => return Err(err),
+        }
     }
     Ok(messages)
 }
@@ -338,10 +640,18 @@ fn host_accept_system(
         match server.listener.accept() {
             Ok((mut stream, addr)) => {
                 let _ = stream.set_nonblocking(true);
+                let _ = stream.set_nodelay(true);
                 let player_id = server.next_player_id;
                 server.next_player_id += 1;
 
-                let _ = send_message(&mut stream, &NetMessage::Welcome { player_id });
+                let _ = send_message(
+                    &mut stream,
+                    &NetMessage::Welcome {
+                        player_id,
+                        udp_port: server.port,
+                        snapshot_interval_ms: (server.snapshot_interval * 1000.0).round() as u16,
+                    },
+                );
 
                 server.clients.push(ClientConnection {
                     id: player_id,
@@ -379,17 +689,11 @@ fn host_accept_system(
     }
 }
 
-fn host_receive_system(
+fn host_receive_tcp_system(
     mut commands: Commands,
     mut server: Option<ResMut<NetworkServer>>,
-    mut input_query: Query<(&PlayerId, &mut PlayerInputState), With<Player>>,
     player_entities: Query<(Entity, &PlayerId), With<Player>>,
     pet_entities: Query<(Entity, &PetOwner), With<Pet>>,
-    asset_server: Res<AssetServer>,
-    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
-    meta: Res<crate::resources::MetaProgression>,
-    upgrade_state: Res<crate::resources::UpgradeState>,
-    pet_sprites: Res<PetSpriteSheet>,
 ) {
     let Some(mut server) = server else {
         return;
@@ -405,44 +709,7 @@ fn host_receive_system(
             }
         };
 
-        for message in messages {
-            match message {
-                NetMessage::Input { player_id, input } => {
-                    let mut found = false;
-                    for (id, mut state) in input_query.iter_mut() {
-                        if id.0 == player_id {
-                            state.movement = Vec2::new(input.dir[0], input.dir[1]);
-                            if input.pushback {
-                                state.pushback = true;
-                            }
-                            found = true;
-                            break;
-                        }
-                    }
-
-                    if !found {
-                        let player_entity = spawn_player_entity(
-                            &mut commands,
-                            &asset_server,
-                            &mut texture_atlas_layouts,
-                            &meta,
-                            PlayerId(player_id),
-                            false,
-                        );
-                        commands.entity(player_entity).insert(RemotePlayer);
-                        spawn_pet(
-                            &mut commands,
-                            crate::components::PetType::GuardDog,
-                            Vec2::ZERO,
-                            &upgrade_state,
-                            &pet_sprites,
-                            player_id,
-                        );
-                    }
-                }
-                _ => {}
-            }
-        }
+        for _message in messages {}
     }
 
     for index in disconnected.into_iter().rev() {
@@ -458,6 +725,92 @@ fn host_receive_system(
                 commands.entity(entity).despawn();
             }
         }
+    }
+}
+
+fn host_receive_udp_system(
+    mut commands: Commands,
+    mut server: Option<ResMut<NetworkServer>>,
+    mut input_query: Query<(&PlayerId, &mut PlayerInputState), With<Player>>,
+    player_entities: Query<(Entity, &PlayerId), With<Player>>,
+    pet_entities: Query<(Entity, &PetOwner), With<Pet>>,
+    asset_server: Res<AssetServer>,
+    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
+    meta: Res<crate::resources::MetaProgression>,
+    upgrade_state: Res<crate::resources::UpgradeState>,
+    pet_sprites: Res<PetSpriteSheet>,
+) {
+    let Some(mut server) = server else {
+        return;
+    };
+
+    let mut buffer = std::mem::take(&mut server.udp_buffer);
+    let messages = match read_udp_messages(&server.udp_socket, buffer.as_mut_slice()) {
+        Ok(messages) => messages,
+        Err(err) => {
+            eprintln!("UDP receive error: {err}");
+            server.udp_buffer = buffer;
+            return;
+        }
+    };
+    server.udp_buffer = buffer;
+
+    for (addr, message) in messages {
+        match message {
+            NetUdpMessage::Hello { player_id } => {
+                server.udp_clients.insert(player_id, addr);
+            }
+            NetUdpMessage::Input { player_id, input } => {
+                let mut found = false;
+                for (id, mut state) in input_query.iter_mut() {
+                    if id.0 == player_id {
+                        state.movement = Vec2::new(input.dir[0], input.dir[1]);
+                        if input.pushback {
+                            state.pushback = true;
+                        }
+                        found = true;
+                        break;
+                    }
+                }
+
+                if !found {
+                    let player_entity = spawn_player_entity(
+                        &mut commands,
+                        &asset_server,
+                        &mut texture_atlas_layouts,
+                        &meta,
+                        PlayerId(player_id),
+                        false,
+                    );
+                    commands.entity(player_entity).insert(RemotePlayer);
+                    spawn_pet(
+                        &mut commands,
+                        crate::components::PetType::GuardDog,
+                        Vec2::ZERO,
+                        &upgrade_state,
+                        &pet_sprites,
+                        player_id,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if server.udp_clients.is_empty() {
+        return;
+    }
+
+    let mut stale_players = Vec::new();
+    for (player_id, _addr) in server.udp_clients.iter() {
+        let still_connected = player_entities.iter().any(|(_, id)| id.0 == *player_id)
+            || pet_entities.iter().any(|(_, owner)| owner.0 == *player_id);
+        if !still_connected {
+            stale_players.push(*player_id);
+        }
+    }
+    for player_id in stale_players {
+        server.udp_clients.remove(&player_id);
     }
 }
 
@@ -480,7 +833,7 @@ fn host_snapshot_system(
         &Enemy,
         Option<&crate::components::Boss>,
         &PhysicsPosition,
-        &Velocity,
+        Option<&Velocity>,
         &Health,
     )>,
     projectiles: Query<(&NetworkId, &Projectile, &Transform)>,
@@ -490,7 +843,7 @@ fn host_snapshot_system(
     let Some(mut server) = server else {
         return;
     };
-    if server.clients.is_empty() {
+    if server.udp_clients.is_empty() {
         return;
     }
 
@@ -528,13 +881,14 @@ fn host_snapshot_system(
     }
 
     let mut enemy_snapshots = Vec::new();
-    for (net_id, enemy, boss_opt, pos, vel, health) in enemies.iter() {
+    for (net_id, enemy, boss_opt, pos, vel_opt, health) in enemies.iter() {
+        let velocity = vel_opt.map(|vel| vel.0).unwrap_or(Vec2::ZERO);
         enemy_snapshots.push(EnemySnapshot {
             id: net_id.0,
             enemy_type: enemy_type_to_u8(enemy.enemy_type),
             boss_type: boss_opt.map(|boss| boss_type_to_u8(boss.boss_type)),
             pos: [pos.0.x, pos.0.y],
-            vel: [vel.0.x, vel.0.y],
+            vel: [velocity.x, velocity.y],
             hp: health.current,
             hp_max: health.max,
         });
@@ -567,8 +921,10 @@ fn host_snapshot_system(
         });
     }
 
-    let snapshot = NetMessage::Snapshot {
-        tick: time.elapsed_secs() as u64,
+    server.snapshot_tick = server.snapshot_tick.wrapping_add(1);
+    let snapshot = NetUdpMessage::Snapshot {
+        tick: server.snapshot_tick,
+        interval_ms: (server.snapshot_interval * 1000.0).round() as u16,
         players: player_snapshots,
         pets: pet_snapshots,
         enemies: enemy_snapshots,
@@ -577,25 +933,152 @@ fn host_snapshot_system(
         gold: gold_snapshots,
     };
 
-    for client in server.clients.iter_mut() {
-        if let Err(err) = send_message(&mut client.stream, &snapshot) {
-            eprintln!("Snapshot send failed for {}: {err}", client.id);
+    for (player_id, addr) in server.udp_clients.iter() {
+        if let Err(err) = send_udp_message(&server.udp_socket, *addr, &snapshot) {
+            eprintln!("Snapshot send failed for {player_id}: {err}");
         }
     }
 }
 
-fn client_receive_system(
+fn host_send_fx_system(
+    mut server: Option<ResMut<NetworkServer>>,
+    mut fx_events: MessageReader<NetFxEvent>,
+) {
+    let Some(mut server) = server else {
+        return;
+    };
+    if server.udp_clients.is_empty() {
+        return;
+    }
+
+    let events: Vec<NetFxEvent> = fx_events.read().cloned().collect();
+    if events.is_empty() {
+        return;
+    }
+
+    let message = NetUdpMessage::Fx { events };
+    for (player_id, addr) in server.udp_clients.iter() {
+        if let Err(err) = send_udp_message(&server.udp_socket, *addr, &message) {
+            eprintln!("FX send failed for {player_id}: {err}");
+        }
+    }
+}
+
+fn client_receive_tcp_system(
     mut commands: Commands,
     mut client: Option<ResMut<NetworkClient>>,
+    mut net_interp: ResMut<NetworkInterpolation>,
+    player_query: Query<(Entity, &PlayerId), With<Player>>,
+) {
+    let Some(mut client) = client else {
+        return;
+    };
+
+    let messages = {
+        let mut buffer = std::mem::take(&mut client.buffer);
+        let result = match read_messages(&mut client.stream, &mut buffer) {
+            Ok(messages) => Ok(messages),
+            Err(err) => Err(err),
+        };
+        client.buffer = buffer;
+
+        match result {
+            Ok(messages) => messages,
+            Err(err) => {
+                eprintln!("Client TCP receive error: {err}");
+                return;
+            }
+        }
+    };
+
+    for message in messages {
+        match message {
+            NetMessage::Welcome {
+                player_id,
+                udp_port,
+                snapshot_interval_ms,
+            } => {
+                client.player_id = Some(player_id);
+                let udp_addr = SocketAddr::new(client.server_addr.ip(), udp_port);
+                if udp_addr != client.server_addr {
+                    if let Err(err) = client.udp_socket.connect(udp_addr) {
+                        eprintln!("UDP reconnect failed: {err}");
+                    } else {
+                        client.server_addr = udp_addr;
+                    }
+                }
+                net_interp.interval = (snapshot_interval_ms as f32 / 1000.0).max(0.001);
+                net_interp.accumulator = 0.0;
+
+                let _ = send_udp_message(
+                    &client.udp_socket,
+                    client.server_addr,
+                    &NetUdpMessage::Hello { player_id },
+                );
+                client.udp_ready = true;
+
+                for (entity, id) in player_query.iter() {
+                    if id.0 == player_id {
+                        commands
+                            .entity(entity)
+                            .insert(LocalPlayer)
+                            .remove::<RemotePlayer>();
+                    }
+                }
+                println!("Connected. Player id: {player_id}");
+            }
+            _ => {}
+        }
+    }
+}
+
+fn client_receive_udp_system(
+    mut client: Option<ResMut<NetworkClient>>,
+    mut inbox: ResMut<NetworkUdpInbox>,
+) {
+    let Some(mut client) = client else {
+        return;
+    };
+
+    let mut buffer = std::mem::take(&mut client.udp_buffer);
+    let messages = match read_udp_messages(&client.udp_socket, buffer.as_mut_slice()) {
+        Ok(messages) => messages,
+        Err(err) => {
+            eprintln!("Client UDP receive error: {err}");
+            client.udp_buffer = buffer;
+            return;
+        }
+    };
+    client.udp_buffer = buffer;
+
+    for (_addr, message) in messages {
+        match message {
+            message @ NetUdpMessage::Snapshot { .. } => {
+                inbox.snapshots.push(message);
+            }
+            NetUdpMessage::Fx { events } => {
+                inbox.fx_events.extend(events);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn client_apply_snapshot_system(
+    mut commands: Commands,
+    client: Option<Res<NetworkClient>>,
     mut entity_map: Option<ResMut<NetworkEntityMap>>,
     asset_server: Res<AssetServer>,
     mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
     meta: Res<crate::resources::MetaProgression>,
-    mut accumulator: ResMut<crate::resources::PhysicsAccumulator>,
+    mut net_interp: ResMut<NetworkInterpolation>,
     enemy_sprites: Res<EnemySpriteSheet>,
     pet_sprites: Res<PetSpriteSheet>,
     xp_sprites: Res<XpGemSprites>,
     gold_sprites: Res<GoldSprites>,
+    mut inbox: ResMut<NetworkUdpInbox>,
+    death_anim_query: Query<(), With<DeathAnimation>>,
+    entity_query: Query<Entity>,
     mut query_set: ParamSet<(
         Query<
             (
@@ -634,62 +1117,46 @@ fn client_receive_system(
             ),
             With<Enemy>,
         >,
-        Query<(Entity, &NetworkId, &mut Transform), With<Projectile>>,
+        Query<
+            (
+                Entity,
+                &NetworkId,
+                &mut PhysicsPosition,
+                &mut PreviousPhysicsPosition,
+                &mut Velocity,
+            ),
+            With<Projectile>,
+        >,
         Query<(Entity, &NetworkId, &mut Transform), With<XpGem>>,
         Query<(Entity, &NetworkId, &mut Transform), With<GoldPickup>>,
     )>,
 ) {
-    let Some(mut client) = client else {
+    let Some(client) = client else {
         return;
     };
     let Some(mut entity_map) = entity_map else {
         return;
     };
+    let client_player_id = client.player_id;
+    let snapshots = std::mem::take(&mut inbox.snapshots);
+    if snapshots.is_empty() {
+        return;
+    }
 
-    let messages = {
-        let mut buffer = std::mem::take(&mut client.buffer);
-        let result = match read_messages(&mut client.stream, &mut buffer) {
-            Ok(messages) => Ok(messages),
-            Err(err) => Err(err),
-        };
-        client.buffer = buffer;
-
-        match result {
-            Ok(messages) => messages,
-            Err(err) => {
-                eprintln!("Client receive error: {err}");
-                return;
-            }
-        }
-    };
-
-    for message in messages {
+    for message in snapshots {
         match message {
-            NetMessage::Welcome { player_id } => {
-                client.player_id = Some(player_id);
-                {
-                    let player_id_query = query_set.p1();
-                    for (entity, id) in player_id_query.iter() {
-                        if id.0 == player_id {
-                            commands
-                                .entity(entity)
-                                .insert(LocalPlayer)
-                                .remove::<RemotePlayer>();
-                        }
-                    }
-                }
-                println!("Connected. Player id: {player_id}");
-            }
-            NetMessage::Snapshot {
+            NetUdpMessage::Snapshot {
                 players,
                 pets,
                 enemies,
                 projectiles,
                 xp_gems,
                 gold,
+                interval_ms,
                 ..
             } => {
-                accumulator.accumulator = crate::resources::FIXED_TIMESTEP;
+                net_interp.accumulator = 0.0;
+                net_interp.interval = (interval_ms as f32 / 1000.0).max(0.001);
                 let mut present_ids: HashSet<u32> = HashSet::new();
 
                 {
@@ -756,7 +1223,7 @@ fn client_receive_system(
                                 )))
                                 .insert(Velocity(Vec2::new(snapshot.vel[0], snapshot.vel[1])));
 
-                            if client.player_id == Some(snapshot.player_id) {
+                            if client_player_id == Some(snapshot.player_id) {
                                 commands.entity(player_entity).insert(LocalPlayer);
                             } else {
                                 commands.entity(player_entity).insert(RemotePlayer);
@@ -835,18 +1302,22 @@ fn client_receive_system(
                     for snapshot in projectiles {
                         present_ids.insert(snapshot.id);
                         if let Some(&entity) = entity_map.entities.get(&snapshot.id) {
-                            if let Ok((_entity, _net_id, mut transform)) =
+                            if let Ok((_entity, _net_id, mut pos, mut prev, mut vel)) =
                                 projectile_query.get_mut(entity)
                             {
-                                transform.translation.x = snapshot.pos[0];
-                                transform.translation.y = snapshot.pos[1];
+                                prev.0 = pos.0;
+                                pos.0 = Vec2::new(snapshot.pos[0], snapshot.pos[1]);
+                                vel.0 = Vec2::new(snapshot.vel[0], snapshot.vel[1]);
                             }
                         } else {
                             let entity = spawn_remote_projectile(
                                 &mut commands,
                                 Vec2::new(snapshot.pos[0], snapshot.pos[1]),
                             );
-                            commands.entity(entity).insert(NetworkId(snapshot.id));
+                            commands
+                                .entity(entity)
+                                .insert(NetworkId(snapshot.id))
+                                .insert(Velocity(Vec2::new(snapshot.vel[0], snapshot.vel[1])));
                             entity_map.entities.insert(snapshot.id, entity);
                         }
                     }
@@ -902,6 +1373,13 @@ fn client_receive_system(
                 let mut to_remove = Vec::new();
                 for (id, entity) in entity_map.entities.iter() {
                     if !present_ids.contains(id) {
+                        if death_anim_query.get(*entity).is_ok() {
+                            continue;
+                        }
+                        if entity_query.get(*entity).is_err() {
+                            to_remove.push(*id);
+                            continue;
+                        }
                         commands.entity(*entity).despawn();
                         to_remove.push(*id);
                     }
@@ -915,6 +1393,51 @@ fn client_receive_system(
     }
 }
 
+fn client_apply_fx_system(
+    mut commands: Commands,
+    client: Option<Res<NetworkClient>>,
+    entity_map: Option<Res<NetworkEntityMap>>,
+    mut inbox: ResMut<NetworkUdpInbox>,
+    ui_fonts: Res<UiFonts>,
+    mut player_damage_flash: ResMut<PlayerDamageFlash>,
+    mut screen_shake: ResMut<ScreenShake>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    area_visuals: Res<AreaDamageVisualAssets>,
+    hitbox_visuals: Res<HitboxVisualsVisible>,
+    pet_sprites: Res<PetSpriteSheet>,
+    hitbox_query: Query<&Hitbox>,
+    transform_query: Query<&Transform>,
+    mut sprite_query: Query<(Entity, &mut Sprite, Option<&mut HitFlash>)>,
+    player_query: Query<(), With<Player>>,
+) {
+    let Some(entity_map) = entity_map else {
+        return;
+    };
+    let local_player_id = client.and_then(|client| client.player_id);
+    let events = std::mem::take(&mut inbox.fx_events);
+    if events.is_empty() {
+        return;
+    }
+
+    apply_net_fx_events(
+        &mut commands,
+        events,
+        &entity_map,
+        &player_query,
+        &hitbox_query,
+        &transform_query,
+        &mut sprite_query,
+        &ui_fonts,
+        &mut player_damage_flash,
+        &mut screen_shake,
+        &mut meshes,
+        &area_visuals,
+        &hitbox_visuals,
+        &pet_sprites,
+        local_player_id,
+    );
+}
+
 fn client_send_input_system(
     time: Res<Time>,
     mut client: Option<ResMut<NetworkClient>>,
@@ -926,6 +1449,9 @@ fn client_send_input_system(
     let Some(player_id) = client.player_id else {
         return;
     };
+    if !client.udp_ready {
+        return;
+    }
 
     client.input_timer.tick(time.delta());
     if !client.input_timer.just_finished() {
@@ -937,8 +1463,27 @@ fn client_send_input_system(
             dir: [input_state.movement.x, input_state.movement.y],
             pushback: input_state.pushback,
         };
-        let _ = send_message(&mut client.stream, &NetMessage::Input { player_id, input });
+        let _ = send_udp_message(
+            &client.udp_socket,
+            client.server_addr,
+            &NetUdpMessage::Input { player_id, input },
+        );
         input_state.pushback = false;
+    }
+}
+
+fn client_interpolation_tick_system(
+    time: Res<Time>,
+    mode: Option<Res<NetworkMode>>,
+    mut net_interp: ResMut<NetworkInterpolation>,
+) {
+    if !matches!(mode.map(|m| *m), Some(NetworkMode::Client)) {
+        return;
+    }
+    net_interp.accumulator += time.delta_secs();
+    let max_time = net_interp.interval + net_interp.max_extrapolation;
+    if net_interp.accumulator > max_time {
+        net_interp.accumulator = max_time;
     }
 }
 
@@ -1103,6 +1648,9 @@ fn spawn_remote_projectile(commands: &mut Commands, position: Vec2) -> Entity {
                 ..default()
             },
             Transform::from_xyz(position.x, position.y, 0.8),
+            PhysicsPosition(position),
+            PreviousPhysicsPosition(position),
+            Velocity(Vec2::ZERO),
         ))
         .id()
 }

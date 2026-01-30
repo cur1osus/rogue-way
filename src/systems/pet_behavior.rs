@@ -12,6 +12,7 @@ use crate::constants::{
     enemy_sizes, ENEMY_HITBOX_SCALE, PET_ENGAGE_SLOT_TOLERANCE, PET_HITBOX_SCALE,
     PET_MELEE_ENGAGE_RANGE_MULT,
 };
+use crate::network::{NetFxEvent, NetworkMode};
 use crate::resources::{PetSpriteSheet, UpgradeState};
 use crate::systems::spawn_hit_particles;
 
@@ -1083,7 +1084,10 @@ pub fn projectile_collision_system(
     mut damage_events: MessageWriter<crate::systems::combat::DamageEvent>,
     mut projectile_query: Query<(Entity, &Transform, &mut Projectile, &Team)>,
     enemy_query: Query<(Entity, &Transform, &Team), With<Enemy>>,
+    mode: Option<Res<NetworkMode>>,
+    mut net_fx_events: MessageWriter<NetFxEvent>,
 ) {
+    let send_fx = matches!(mode.map(|m| *m), Some(NetworkMode::Host));
     for (projectile_entity, projectile_transform, mut projectile, projectile_team) in
         projectile_query.iter_mut()
     {
@@ -1109,6 +1113,14 @@ pub fn projectile_collision_system(
 
                 let impact_pos = enemy_transform.translation.truncate();
                 spawn_hit_particles(&mut commands, impact_pos, Color::srgb(1.0, 0.8, 0.4), 6);
+                if send_fx {
+                    let color = Color::srgb(1.0, 0.8, 0.4).to_srgba();
+                    net_fx_events.write(NetFxEvent::HitParticles {
+                        pos: [impact_pos.x, impact_pos.y],
+                        color: [color.red, color.green, color.blue, color.alpha],
+                        count: 6,
+                    });
+                }
 
                 // Проверяем пробивание
                 if projectile.piercing && projectile.pierced_count < projectile.max_pierce {

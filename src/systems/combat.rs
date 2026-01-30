@@ -2,12 +2,13 @@ use crate::components::{
     AnimationTimer, AttackAnimation, AttackRange, AttackTimer, Boss, Damage, DeathAnimation, Enemy,
     EnemyAIConfig, EnemyAction, EnemyBlackboard, FloatingText, Gold, GoldHighlightTimer,
     GoldPickup, Health, HitFlash, Hitbox, LocalPlayer, MovementSpeed, PendingAttack, Pet, PetType,
-    Player, SlowEffect, Target, Team, Velocity, XpGem,
+    Player, PlayerId, SlowEffect, Target, Team, Velocity, XpGem,
 };
 use crate::constants::{
     AREA_DAMAGE_CONE_ANGLE_MAX, DAMAGE_TEXT_DURATION, GOLD_SCALE, PET_HITBOX_SCALE, UI_FONT_SCALE,
     XP_GEM_SCALE,
 };
+use crate::network::{NetFxEvent, NetworkId, NetworkMode};
 use crate::resources::{
     GoldSprites, MetaProgression, PetSpriteSheet, PlayerDamageFlash, ScreenShake, UiFonts,
     UpgradeState, WaveConfig, XpGemSprites,
@@ -263,12 +264,16 @@ pub fn pending_attack_system(
     mut pending_query: Query<(Entity, &mut PendingAttack)>,
     mut damage_events: MessageWriter<DamageEvent>,
     transform_query: Query<&Transform>,
+    player_id_query: Query<&PlayerId>,
     enemy_query: Query<(Entity, &Transform, &Team), With<Enemy>>,
     mut screen_shake: ResMut<ScreenShake>,
     pet_sprites: Res<PetSpriteSheet>,
     hitbox_visuals: Res<HitboxVisualsVisible>,
     area_visuals: Res<AreaDamageVisualAssets>,
+    mode: Option<Res<NetworkMode>>,
+    mut net_fx_events: MessageWriter<NetFxEvent>,
 ) {
+    let send_fx = matches!(mode.map(|m| *m), Some(NetworkMode::Host));
     for (attacker_entity, mut pending) in pending_query.iter_mut() {
         pending.timer.tick(time.delta());
         if !pending.timer.just_finished() {
@@ -308,10 +313,23 @@ pub fn pending_attack_system(
                 pending.hit_color,
                 pending.hit_particles,
             );
+            if send_fx {
+                let color = pending.hit_color.to_srgba();
+                net_fx_events.write(NetFxEvent::HitParticles {
+                    pos: [target_pos.x, target_pos.y],
+                    color: [color.red, color.green, color.blue, color.alpha],
+                    count: pending.hit_particles,
+                });
+            }
         }
 
         if pending.slime_heal_effect {
             spawn_slime_heal_effect(&mut commands, target_pos, &pet_sprites);
+            if send_fx {
+                net_fx_events.write(NetFxEvent::SlimeHeal {
+                    pos: [target_pos.x, target_pos.y],
+                });
+            }
         }
 
         if pending.area_cone_angle_deg > 0.0 {
@@ -331,6 +349,14 @@ pub fn pending_attack_system(
                     attack_direction,
                     cone_angle,
                 );
+            }
+            if send_fx {
+                net_fx_events.write(NetFxEvent::AreaDamage {
+                    pos: [attacker_pos.x, attacker_pos.y],
+                    radius: cone_length,
+                    dir: [attack_direction.x, attack_direction.y],
+                    cone_angle,
+                });
             }
             for (splash_entity, splash_transform, splash_team) in enemy_query.iter() {
                 if splash_entity == pending.target || pending.team.0 == splash_team.0 {
@@ -362,6 +388,15 @@ pub fn pending_attack_system(
 
         if let Some((intensity, duration)) = pending.screen_shake {
             screen_shake.trigger(intensity, duration);
+            if send_fx {
+                if let Ok(player_id) = player_id_query.get(pending.target) {
+                    net_fx_events.write(NetFxEvent::ScreenShake {
+                        player_id: player_id.0,
+                        intensity,
+                        duration,
+                    });
+                }
+            }
         }
 
         commands.entity(attacker_entity).remove::<PendingAttack>();
@@ -374,7 +409,8 @@ pub fn damage_system(
     mut damage_events: MessageReader<DamageEvent>,
     mut health_query: Query<(&mut Health, &Transform, Option<&Hitbox>)>,
     enemy_query: Query<(&Enemy, Entity, Option<&Boss>), With<Enemy>>,
-    player_query: Query<(Entity, &Gold, Option<&LocalPlayer>), With<Player>>,
+    player_query: Query<(Entity, &PlayerId, &Gold, Option<&LocalPlayer>), With<Player>>,
+    net_ids: Query<&NetworkId>,
     mut sprite_query: Query<(Entity, &mut Sprite, Option<&mut HitFlash>)>,
     upgrade_state: Res<UpgradeState>,
     ui_fonts: Res<UiFonts>,
@@ -383,7 +419,10 @@ pub fn damage_system(
     gold_sprites: Res<GoldSprites>,
     xp_gem_sprites: Res<XpGemSprites>,
     mut player_damage_flash: ResMut<PlayerDamageFlash>,
+    mode: Option<Res<NetworkMode>>,
+    mut net_fx_events: MessageWriter<NetFxEvent>,
 ) {
+    let send_fx = matches!(mode.map(|m| *m), Some(NetworkMode::Host));
     for event in damage_events.read() {
         if let Ok((mut health, transform, hitbox)) = health_query.get_mut(event.target) {
             let player_info = player_query.get(event.target).ok();
@@ -398,9 +437,16 @@ pub fn damage_system(
                 health.current = 0.0;
             }
 
-            if let Some((_entity, _gold, local_opt)) = player_info {
+            if let Some((_entity, player_id, _gold, local_opt)) = player_info {
                 if local_opt.is_some() && event.damage > 0.0 {
                     player_damage_flash.trigger(1.0, 0.35);
+                    if send_fx {
+                        net_fx_events.write(NetFxEvent::PlayerDamageFlash {
+                            player_id: player_id.0,
+                            intensity: 1.0,
+                            duration: 0.35,
+                        });
+                    }
                 }
             }
             let target_pos = transform.translation;
@@ -443,6 +489,15 @@ pub fn damage_system(
                     commands
                         .entity(entity)
                         .insert(HitFlash::new(0.1, original_color));
+                }
+            }
+
+            if send_fx {
+                if let Ok(net_id) = net_ids.get(event.target) {
+                    net_fx_events.write(NetFxEvent::Hit {
+                        target_id: net_id.0,
+                        damage: event.damage,
+                    });
                 }
             }
 
@@ -521,6 +576,20 @@ pub fn damage_system(
                         Color::srgb(0.9, 0.1, 0.1),
                         death_particle_count,
                     );
+                    if send_fx {
+                        let color = Color::srgb(0.9, 0.1, 0.1).to_srgba();
+                        net_fx_events.write(NetFxEvent::HitParticles {
+                            pos: [transform.translation.x, transform.translation.y],
+                            color: [color.red, color.green, color.blue, color.alpha],
+                            count: death_particle_count,
+                        });
+                        if let Ok(net_id) = net_ids.get(event.target) {
+                            net_fx_events.write(NetFxEvent::DeathAnimation {
+                                target_id: net_id.0,
+                                duration: 0.8,
+                            });
+                        }
+                    }
 
                     // Добавляем компонент анимации смерти (0.8 сек для 8 кадров)
                     commands
@@ -541,7 +610,7 @@ pub fn damage_system(
                 }
 
                 // Если это игрок - game over
-                if let Some((_player_entity, player_gold, local_opt)) = player_info {
+                if let Some((_player_entity, _player_id, player_gold, local_opt)) = player_info {
                     if local_opt.is_some() {
                         let run_time = wave_config.game_time as u32;
                         if run_time > meta.save_data.best_time {

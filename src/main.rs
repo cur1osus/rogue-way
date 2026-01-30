@@ -38,6 +38,7 @@ fn main() {
         .add_message::<DamageEvent>()
         .add_message::<GainXpEvent>()
         .add_message::<LevelUpEvent>()
+        .add_message::<NetFxEvent>()
         // Ресурсы
         .init_resource::<WaveConfig>()
         .init_resource::<UpgradeState>()
