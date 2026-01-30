@@ -357,11 +357,11 @@ pub mod ui_colors {
     /// Светло-серый текст (описания)
     /// Используется: описания улучшений (level_up.rs), описания предметов в магазине (shop.rs),
     /// подсказка о закрытии панели статов (hud.rs)
-    pub const TEXT_GRAY_LIGHT: Color = Color::srgb(0.8, 0.8, 0.8);
+    pub const TEXT_GRAY_LIGHT: Color = Color::srgb(1.0, 1.0, 1.0);
 
     /// Средний серый текст
     /// Используется: подзаголовок в главном меню (main_menu.rs)
-    pub const TEXT_GRAY: Color = Color::srgb(0.7, 0.7, 0.8);
+    pub const TEXT_GRAY: Color = Color::srgb(1.0, 1.0, 1.0);
 
     /// Темно-серый текст (дополнительная информация)
     /// Используется: текст улучшений в панели статов (hud.rs)
