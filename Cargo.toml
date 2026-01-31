@@ -36,11 +36,21 @@ bevy = { version = "0.18", default-features = false, features = [
 rand = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-bincode = "1.3"
+bincode = "1.3"  # TEMPORARY: для legacy networking, удалить после миграции
 dirs = "5.0"
 sysinfo = "0.30"
 image = "0.25"
 winit = "0.30"
+
+# Networking dependencies
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util"] }
+quinn = "0.11"
+postcard = { version = "1", features = ["alloc"] }
+bytes = "1"
+dashmap = "6"
+thiserror = "1"
+rcgen = "0.13"
+rustls = "0.23"
 
 # Enable dynamic linking for faster compile times during development
 [profile.dev]
@@ -48,3 +58,15 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+[lib]
+name = "roggy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "game_client"
+path = "src/bin/game_client.rs"
+
+[[bin]]
+name = "game_server"
+path = "src/bin/game_server.rs"
