@@ -26,6 +26,7 @@ pub fn build_base_app() -> App {
                     title: "Roggy".to_string(),
                     resolution: (1280, 720).into(),
                     mode: WindowMode::BorderlessFullscreen(MonitorSelection::Primary),
+                    present_mode: bevy::window::PresentMode::AutoNoVsync, // Отключить VSync для >60 FPS
                     ..default()
                 }),
                 ..default()
