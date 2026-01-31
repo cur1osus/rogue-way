@@ -147,28 +147,41 @@ impl NetworkDebugMetrics {
 #[derive(Component)]
 pub struct NetworkDebugUiText;
 
+/// Marker component для Debug UI root node
+#[derive(Component)]
+pub struct NetworkDebugUiRoot;
+
+/// Resource для состояния видимости Debug UI
+#[derive(Resource, Default)]
+pub struct NetworkDebugUiVisible(pub bool);
+
 /// Плагин для Debug UI
 pub struct NetworkDebugUiPlugin;
 
 impl Plugin for NetworkDebugUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<NetworkDebugMetrics>()
+            .init_resource::<NetworkDebugUiVisible>()
             .add_systems(Startup, spawn_debug_ui)
-            .add_systems(Update, (update_debug_ui, update_bandwidth_stats));
+            .add_systems(Update, (toggle_debug_ui, update_debug_ui, update_bandwidth_stats));
     }
 }
 
 /// Spawn Debug UI overlay
 fn spawn_debug_ui(mut commands: Commands) {
     commands
-        .spawn(Node {
-            position_type: PositionType::Absolute,
-            left: Val::Px(10.0),
-            top: Val::Px(10.0),
-            padding: UiRect::all(Val::Px(10.0)),
-            ..default()
-        })
-        .insert(BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)))
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(10.0),
+                top: Val::Px(10.0),
+                padding: UiRect::all(Val::Px(10.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
+            NetworkDebugUiRoot,
+            Visibility::Hidden, // Скрыт по умолчанию
+        ))
         .with_children(|parent| {
             parent.spawn((
                 Text::new("=== Network Debug ===\n\nInitializing..."),
@@ -180,6 +193,27 @@ fn spawn_debug_ui(mut commands: Commands) {
                 NetworkDebugUiText,
             ));
         });
+}
+
+/// Переключает видимость Debug UI по нажатию F3
+fn toggle_debug_ui(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut visible: ResMut<NetworkDebugUiVisible>,
+    mut ui_query: Query<&mut Visibility, With<NetworkDebugUiRoot>>,
+) {
+    if keyboard.just_pressed(KeyCode::F3) {
+        visible.0 = !visible.0;
+
+        for mut visibility in ui_query.iter_mut() {
+            *visibility = if visible.0 {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            };
+        }
+
+        println!("[Debug UI] {}", if visible.0 { "Shown" } else { "Hidden" });
+    }
 }
 
 /// Обновляет Debug UI с текущими метриками
