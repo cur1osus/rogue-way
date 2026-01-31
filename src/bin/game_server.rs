@@ -6,6 +6,7 @@ use bevy::prelude::*;
 use std::sync::Arc;
 use std::time::Duration;
 
+use roggy::network::protocol::messages::S2C;
 use roggy::network::sync::server::NetServerPlugin;
 use roggy::network::transport::{QuicServer, ServerChannels, ServerChannelsResource};
 use roggy::network::NetworkMode;
@@ -28,11 +29,19 @@ fn main() {
     )));
 
     // Создаем ServerChannels в Bevy контексте
-    let channels = Arc::new(ServerChannels::new());
-    let channels_clone = channels.clone();
+    let mut channels = ServerChannels::new();
 
-    // Вставляем channels как Resource для networking систем
-    app.insert_resource(ServerChannelsResource(channels));
+    // Извлекаем outgoing_rx для QUIC dispatcher ДО создания Arc
+    let outgoing_rx = channels
+        .outgoing_rx
+        .take()
+        .expect("outgoing_rx already taken");
+
+    // Теперь создаем Arc и вставляем как Resource
+    let channels = Arc::new(channels);
+    app.insert_resource(ServerChannelsResource(channels.clone()));
+
+    let channels_clone = channels;
 
     // Network mode: Host (authoritative server)
     app.insert_resource(NetworkMode::Host);
@@ -56,6 +65,22 @@ fn main() {
                 println!("[Server] Ready to accept client connections");
 
                 let server = Arc::new(server);
+
+                // Запускаем outgoing dispatcher
+                let server_clone = server.clone();
+                let mut outgoing_rx = outgoing_rx; // Move and make mutable
+                tokio::spawn(async move {
+                    while let Some((conn_id, msg)) = outgoing_rx.recv().await {
+                        if let Some(sender) = server_clone.connection_senders.get(&conn_id) {
+                            if let Err(_e) = sender.value().send(msg) {
+                                eprintln!("[Server Dispatcher] Failed to send to {}", conn_id);
+                            }
+                        } else {
+                            eprintln!("[Server Dispatcher] Unknown connection: {}", conn_id);
+                        }
+                    }
+                    println!("[Server Dispatcher] Outgoing dispatcher closed");
+                });
 
                 // Запускаем accept loop
                 server.spawn_loops();
