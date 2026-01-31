@@ -32,7 +32,11 @@ pub fn build_base_app() -> App {
             }),
     )
     .add_plugins(NetworkPlugin)
+    .add_plugins(network::sync::server::NetServerPlugin)
+    .add_plugins(network::sync::client::NetClientPlugin)
     .add_plugins(network::debug_ui::NetworkDebugUiPlugin)
+    // Настройка Fixed Timestep на 30 Hz для детерминистичной симуляции
+    .insert_resource(Time::<Fixed>::from_seconds(1.0 / 30.0))
     // Состояния
     .init_state::<GameState>()
     // События
@@ -124,7 +128,44 @@ pub fn build_base_app() -> App {
     .add_systems(OnEnter(GameState::Shop), cleanup_game_entities)
     .add_systems(OnEnter(GameState::MainMenu), cleanup_game_entities)
     .add_systems(OnExit(GameState::Shop), cleanup_game_entities)
+    // Fixed timestep системы для детерминистичной симуляции (30 Hz)
+    .add_systems(
+        FixedUpdate,
+        (
+            enemy_ai_system,
+            physics_update_system,
+            knockback_effect_system,
+            pet_ai_system,
+            pet_attack_timer_system,
+        )
+            .run_if(in_state(GameState::Playing))
+            .run_if(is_authoritative),
+    )
+    .add_systems(
+        FixedUpdate,
+        (
+            spawn_system,
+            attack_timer_tick_system,
+            pending_attack_system,
+            collision_system,
+            pet_projectile_attack_system,
+            projectile_movement_system,
+            projectile_collision_system,
+            enemy_attack_system,
+            damage_system,
+            slow_effect_system,
+        )
+            .run_if(in_state(GameState::Playing))
+            .run_if(is_authoritative),
+    )
+    .add_systems(
+        FixedUpdate,
+        (pickup_system, gain_xp_system, cleanup_on_death_system)
+            .run_if(in_state(GameState::Playing))
+            .run_if(is_authoritative),
+    )
     // Системы обновления (только во время игры)
+    // Client prediction для локального игрока
     .add_systems(
         Update,
         (
@@ -133,11 +174,6 @@ pub fn build_base_app() -> App {
             pushback_input_system,
             pushback_ready_glow_setup_system.before(pushback_ready_glow_system),
             pushback_ready_glow_system.after(pushback_input_system),
-            enemy_ai_system,
-            physics_update_system,
-            knockback_effect_system,
-            pet_ai_system,
-            pet_attack_timer_system,
         )
             .run_if(in_state(GameState::Playing))
             .run_if(is_authoritative),
@@ -163,35 +199,12 @@ pub fn build_base_app() -> App {
     )
     .add_systems(
         Update,
-        (
-            spawn_system,
-            attack_timer_tick_system,
-            pending_attack_system,
-            collision_system,
-            pet_projectile_attack_system,
-            projectile_movement_system,
-            projectile_collision_system,
-            enemy_attack_system,
-            damage_system,
-            slow_effect_system,
-        )
-            .run_if(in_state(GameState::Playing))
-            .run_if(is_authoritative),
-    )
-    .add_systems(
-        Update,
         (enemy_animation_system, enemy_death_animation_system)
             .run_if(in_state(GameState::Playing)),
     )
     .add_systems(
         Update,
         terrain_chunk_system.run_if(in_state(GameState::Playing)),
-    )
-    .add_systems(
-        Update,
-        (pickup_system, gain_xp_system, cleanup_on_death_system)
-            .run_if(in_state(GameState::Playing))
-            .run_if(is_authoritative),
     )
     .add_systems(
         Update,

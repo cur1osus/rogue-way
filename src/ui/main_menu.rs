@@ -1,5 +1,6 @@
 use crate::constants::{ui_colors, ui_text, UI_FONT_SCALE};
-use crate::network::{start_client, start_host, NetworkMode, DEFAULT_PORT};
+use crate::network::quic_integration::{start_quic_host, start_quic_client};
+use crate::network::{NetworkMode, DEFAULT_PORT};
 use crate::resources::{TerrainConfig, TerrainSprites, UiFonts};
 use crate::systems::spawn_menu_terrain;
 use crate::ui::GameState;
@@ -725,7 +726,7 @@ pub fn handle_main_menu_buttons(
         if *interaction == Interaction::Pressed {
             join_state.active = false;
             join_state.error = None;
-            match start_host(&mut commands, DEFAULT_PORT) {
+            match start_quic_host(&mut commands, DEFAULT_PORT) {
                 Ok(join_code) => {
                     println!("Host started. Join code: {join_code}");
                     for entity in menu_ui_query.iter() {
@@ -861,7 +862,7 @@ pub fn join_menu_input_system(
             return;
         }
         match input.parse::<SocketAddr>() {
-            Ok(addr) => match start_client(&mut commands, addr) {
+            Ok(addr) => match start_quic_client(&mut commands, addr) {
                 Ok(()) => {
                     for entity in menu_ui_query.iter() {
                         commands.entity(entity).despawn();
