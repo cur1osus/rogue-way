@@ -32,6 +32,7 @@ pub fn build_base_app() -> App {
             }),
     )
     .add_plugins(NetworkPlugin)
+    .add_plugins(network::debug_ui::NetworkDebugUiPlugin)
     // Состояния
     .init_state::<GameState>()
     // События

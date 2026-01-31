@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 use crate::components::{Health, LocalPlayer, PhysicsPosition, PlayerId, RemotePlayer, Velocity};
+use crate::network::debug_ui::NetworkDebugMetrics;
 use crate::network::protocol::delta::WorldDelta;
 use crate::network::protocol::messages::{C2S, InputCmd, S2C};
 use crate::network::protocol::quantization::Dequantize;
@@ -119,6 +120,20 @@ pub struct ClientIncomingRx(pub Arc<Mutex<mpsc::UnboundedReceiver<S2C>>>);
 #[derive(Resource)]
 pub struct LocalPlayerId(pub u8);
 
+/// Resource для отслеживания таймера Ping
+#[derive(Resource)]
+pub struct PingTimer {
+    pub timer: Timer,
+}
+
+impl Default for PingTimer {
+    fn default() -> Self {
+        Self {
+            timer: Timer::from_seconds(1.0, TimerMode::Repeating),
+        }
+    }
+}
+
 /// Плагин для клиентской части networking
 pub struct NetClientPlugin;
 
@@ -127,6 +142,7 @@ impl Plugin for NetClientPlugin {
         app.init_resource::<ClientTick>()
             .init_resource::<SnapshotBuffer>()
             .init_resource::<NetworkEntityMap>()
+            .init_resource::<PingTimer>()
             .add_systems(Startup, setup_client_channels)
             .add_systems(
                 Update,
@@ -134,6 +150,7 @@ impl Plugin for NetClientPlugin {
                     client_read_incoming,
                     client_capture_input,
                     client_apply_snapshot,
+                    client_send_ping,
                 )
                     .run_if(is_client),
             );
@@ -177,6 +194,7 @@ fn client_read_incoming(
     mut snapshot_buffer: ResMut<SnapshotBuffer>,
     channels: Option<Res<ClientChannelsResource>>,
     mut commands: Commands,
+    mut debug_metrics: Option<ResMut<NetworkDebugMetrics>>,
 ) {
     let Some(incoming_rx) = incoming_rx else {
         return;
@@ -265,8 +283,14 @@ fn client_read_incoming(
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_millis() as u64;
-                let rtt_ms = now_ms.saturating_sub(timestamp_ms);
-                println!("[Client] Pong received, RTT: {} ms", rtt_ms);
+                let rtt_ms = now_ms.saturating_sub(timestamp_ms) as f32;
+
+                println!("[Client] Pong received, RTT: {:.1} ms", rtt_ms);
+
+                // Обновляем debug metrics
+                if let Some(ref mut metrics) = debug_metrics {
+                    metrics.add_rtt_sample(rtt_ms);
+                }
             }
 
             S2C::Kick { reason } => {
@@ -427,6 +451,28 @@ fn apply_player_state(
     }
 }
 
+
+/// Система для периодической отправки Ping серверу (RTT measurement)
+fn client_send_ping(
+    channels: Option<Res<ClientChannelsResource>>,
+    mut ping_timer: ResMut<PingTimer>,
+    time: Res<Time>,
+) {
+    let Some(channels) = channels else {
+        return;
+    };
+
+    ping_timer.timer.tick(time.delta());
+
+    if ping_timer.timer.just_finished() {
+        let timestamp_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        let _ = channels.outgoing_tx.send(C2S::Ping { timestamp_ms });
+    }
+}
 
 /// Применяет WorldDelta к текущему состоянию мира
 fn _apply_delta(

@@ -15,3 +15,4 @@ pub mod transport;
 pub mod world;
 pub mod sync;
 pub mod quic_integration;
+pub mod debug_ui;
