@@ -36,7 +36,7 @@ pub fn build_base_app() -> App {
     .add_plugins(network::sync::client::NetClientPlugin)
     .add_plugins(network::debug_ui::NetworkDebugUiPlugin)
     // Настройка Fixed Timestep на 30 Hz для детерминистичной симуляции
-    .insert_resource(Time::<Fixed>::from_seconds(1.0 / 30.0))
+    .insert_resource(Time::<Fixed>::from_hz(30.0))
     // Состояния
     .init_state::<GameState>()
     // События

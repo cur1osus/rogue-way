@@ -142,6 +142,10 @@ fn spawn_server_outgoing_dispatcher(
 }
 
 /// Запускает IO loops для клиента (чтение и запись)
+///
+/// Клиент открывает ОДИН bi-directional stream и использует:
+/// - send половину для отправки C2S сообщений
+/// - recv половину для получения S2C сообщений
 fn spawn_client_io_loops(
     client: Arc<QuicClient>,
     mut outgoing_rx: mpsc::UnboundedReceiver<C2S>,
@@ -149,62 +153,51 @@ fn spawn_client_io_loops(
     let connection = client.connection.clone();
     let incoming_tx = client.channels.incoming_tx.clone();
 
-    // Reader task: читает сообщения от сервера
-    let connection_reader = connection.clone();
     tokio::spawn(async move {
-        let connection = connection_reader;
-        loop {
-            match connection.accept_bi().await {
-                Ok((mut send, mut recv)) => {
-                    let incoming_tx = incoming_tx.clone();
+        // Клиент открывает один bi-directional stream для всей коммуникации
+        match connection.open_bi().await {
+            Ok((mut send, mut recv)) => {
+                println!("[Client] Bi-directional stream opened");
 
-                    // Spawn отдельный task для этого stream
-                    tokio::spawn(async move {
-                        loop {
-                            match super::transport::quic_client::read_message(&mut recv).await {
-                                Ok(msg) => {
-                                    let _ = incoming_tx.send(msg);
-                                }
-                                Err(e) => {
-                                    eprintln!("[Client Reader] Error reading message: {}", e);
-                                    break;
-                                }
+                // Spawn reader task для получения S2C сообщений
+                let incoming_tx_clone = incoming_tx.clone();
+                let reader = tokio::spawn(async move {
+                    loop {
+                        match super::transport::quic_client::read_message(&mut recv).await {
+                            Ok(msg) => {
+                                let _ = incoming_tx_clone.send(msg);
+                            }
+                            Err(e) => {
+                                eprintln!("[Client Reader] Error reading message: {}", e);
+                                break;
                             }
                         }
-                    });
-
-                    // NOTE: send половина stream не используется в этой архитектуре
-                    drop(send);
-                }
-                Err(e) => {
-                    eprintln!("[Client Reader] Connection closed: {}", e);
-                    break;
-                }
-            }
-        }
-        println!("[Client Reader] Stopped");
-    });
-
-    // Writer task: отправляет сообщения серверу
-    tokio::spawn(async move {
-        // Открываем би-directional stream для отправки
-        match connection.open_bi().await {
-            Ok((mut send, _recv)) => {
-                while let Some(msg) = outgoing_rx.recv().await {
-                    if let Err(e) =
-                        super::transport::quic_client::write_message(&mut send, &msg).await
-                    {
-                        eprintln!("[Client Writer] Error writing message: {}", e);
-                        break;
                     }
-                }
-                let _ = send.finish();
+                    println!("[Client Reader] Stopped");
+                });
+
+                // Writer task для отправки C2S сообщений
+                let writer = tokio::spawn(async move {
+                    while let Some(msg) = outgoing_rx.recv().await {
+                        if let Err(e) =
+                            super::transport::quic_client::write_message(&mut send, &msg).await
+                        {
+                            eprintln!("[Client Writer] Error writing message: {}", e);
+                            break;
+                        }
+                    }
+                    let _ = send.finish();
+                    println!("[Client Writer] Stopped");
+                });
+
+                // Ждём завершения обоих tasks
+                let _ = tokio::join!(reader, writer);
             }
             Err(e) => {
-                eprintln!("[Client Writer] Failed to open stream: {}", e);
+                eprintln!("[Client] Failed to open bi-directional stream: {}", e);
             }
         }
-        println!("[Client Writer] Stopped");
+        println!("[Client IO] Stopped");
     });
 }
 
