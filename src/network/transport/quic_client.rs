@@ -148,7 +148,7 @@ async fn write_loop(
 }
 
 /// Читает одно сообщение с length-prefix framing
-async fn read_message(
+pub async fn read_message(
     recv: &mut quinn::RecvStream,
 ) -> Result<S2C, Box<dyn std::error::Error + Send + Sync>> {
     // Читаем длину (4 bytes)
@@ -170,7 +170,7 @@ async fn read_message(
 }
 
 /// Пишет одно сообщение с length-prefix framing
-async fn write_message(
+pub async fn write_message(
     send: &mut quinn::SendStream,
     msg: &C2S,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

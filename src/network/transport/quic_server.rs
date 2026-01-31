@@ -11,7 +11,7 @@ pub struct QuicServer {
     pub endpoint: quinn::Endpoint,
     pub channels: Arc<ServerChannels>,
     /// Per-connection sender для outgoing messages
-    connection_senders: Arc<DashMap<ConnId, mpsc::UnboundedSender<S2C>>>,
+    pub connection_senders: Arc<DashMap<ConnId, mpsc::UnboundedSender<S2C>>>,
 }
 
 impl QuicServer {

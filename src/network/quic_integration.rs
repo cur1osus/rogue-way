@@ -5,21 +5,29 @@ use bevy::prelude::*;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use super::protocol::messages::{S2C, C2S};
 use super::transport::{
     ClientChannels, ClientChannelsResource, QuicClient, QuicServer, ServerChannels,
     ServerChannelsResource,
 };
 use super::NetworkMode;
+use tokio::sync::mpsc;
 
 /// Запускает QUIC сервер (Host mode)
 /// Возвращает join code (адрес сервера) для отображения в UI
 pub fn start_quic_host(commands: &mut Commands, port: u16) -> Result<String, String> {
     // Создаем ServerChannels в Bevy контексте
-    let channels = Arc::new(ServerChannels::new());
-    let channels_clone = channels.clone();
+    let mut channels = ServerChannels::new();
 
-    // Вставляем channels как Bevy Resource для использования в системах
-    commands.insert_resource(ServerChannelsResource(channels));
+    // Извлекаем outgoing_rx для QUIC dispatcher ДО создания Arc
+    let outgoing_rx = channels
+        .outgoing_rx
+        .take()
+        .expect("outgoing_rx already taken");
+
+    // Теперь создаем Arc и вставляем как Resource
+    let channels = Arc::new(channels);
+    commands.insert_resource(ServerChannelsResource(channels.clone()));
 
     // Создаем tokio runtime для async операций
     let rt = tokio::runtime::Runtime::new()
@@ -31,13 +39,14 @@ pub fn start_quic_host(commands: &mut Commands, port: u16) -> Result<String, Str
 
     // Запускаем QUIC сервер в фоновом потоке
     rt.spawn(async move {
-        match QuicServer::bind(&addr, channels_clone).await {
+        match QuicServer::bind(&addr, channels).await {
             Ok(server) => {
                 println!("[QUIC Host] Server started on {}", addr);
                 println!("[QUIC Host] Join code: {}", join_code_clone);
                 let server = Arc::new(server);
 
-                // Запускаем accept loop
+                // Запускаем accept loop и outgoing dispatcher
+                spawn_server_outgoing_dispatcher(server.clone(), outgoing_rx);
                 server.spawn_loops();
 
                 // Держим runtime живым
@@ -60,11 +69,17 @@ pub fn start_quic_host(commands: &mut Commands, port: u16) -> Result<String, Str
 /// Подключается к QUIC серверу (Client mode)
 pub fn start_quic_client(commands: &mut Commands, server_addr: SocketAddr) -> Result<(), String> {
     // Создаем ClientChannels в Bevy контексте
-    let channels = Arc::new(ClientChannels::new());
-    let channels_clone = channels.clone();
+    let mut channels = ClientChannels::new();
 
-    // Вставляем channels как Bevy Resource
-    commands.insert_resource(ClientChannelsResource(channels));
+    // Извлекаем outgoing_rx для QUIC writer ДО создания Arc
+    let outgoing_rx = channels
+        .outgoing_rx
+        .take()
+        .expect("outgoing_rx already taken");
+
+    // Теперь создаем Arc и вставляем как Resource
+    let channels = Arc::new(channels);
+    commands.insert_resource(ClientChannelsResource(channels.clone()));
 
     // Создаем tokio runtime
     let rt = tokio::runtime::Runtime::new()
@@ -74,17 +89,13 @@ pub fn start_quic_client(commands: &mut Commands, server_addr: SocketAddr) -> Re
 
     // Подключаемся к серверу в фоновом потоке
     rt.spawn(async move {
-        match QuicClient::connect(&addr_str, channels_clone).await {
+        match QuicClient::connect(&addr_str, channels).await {
             Ok(client) => {
                 println!("[QUIC Client] Connected to {}", addr_str);
                 let client = Arc::new(client);
 
-                // Запускаем IO loop
-                // FIXME: Нужно получить outgoing_rx из channels
-                // Но мы уже передали channels в Bevy как Resource
-                // Решение: разделить rx на два Arc или использовать другой подход
-
-                println!("[QUIC Client] IO loop placeholder - waiting for full implementation");
+                // Запускаем IO loops для чтения и записи
+                spawn_client_io_loops(client, outgoing_rx);
 
                 // Держим runtime живым
                 loop {
@@ -106,8 +117,95 @@ pub fn start_quic_client(commands: &mut Commands, server_addr: SocketAddr) -> Re
 /// Проверяет, нужно ли использовать legacy networking
 /// Возвращает true если QUIC еще не готов для production
 pub fn use_legacy_networking() -> bool {
-    // FIXME: Пока true, так как системы server_read_incoming/etc еще не реализованы
-    true
+    // QUIC networking готов к использованию
+    false
+}
+
+/// Запускает dispatcher для отправки сообщений клиентам
+fn spawn_server_outgoing_dispatcher(
+    server: Arc<QuicServer>,
+    mut outgoing_rx: mpsc::UnboundedReceiver<(u64, S2C)>,
+) {
+    tokio::spawn(async move {
+        while let Some((conn_id, msg)) = outgoing_rx.recv().await {
+            // Находим sender для этого соединения
+            if let Some(sender) = server.connection_senders.get(&conn_id) {
+                if let Err(_e) = sender.value().send(msg) {
+                    eprintln!("[Server Dispatcher] Failed to send to {}", conn_id);
+                }
+            } else {
+                eprintln!("[Server Dispatcher] Unknown connection: {}", conn_id);
+            }
+        }
+        println!("[Server Dispatcher] Outgoing dispatcher closed");
+    });
+}
+
+/// Запускает IO loops для клиента (чтение и запись)
+fn spawn_client_io_loops(
+    client: Arc<QuicClient>,
+    mut outgoing_rx: mpsc::UnboundedReceiver<C2S>,
+) {
+    let connection = client.connection.clone();
+    let incoming_tx = client.channels.incoming_tx.clone();
+
+    // Reader task: читает сообщения от сервера
+    let connection_reader = connection.clone();
+    tokio::spawn(async move {
+        let connection = connection_reader;
+        loop {
+            match connection.accept_bi().await {
+                Ok((mut send, mut recv)) => {
+                    let incoming_tx = incoming_tx.clone();
+
+                    // Spawn отдельный task для этого stream
+                    tokio::spawn(async move {
+                        loop {
+                            match super::transport::quic_client::read_message(&mut recv).await {
+                                Ok(msg) => {
+                                    let _ = incoming_tx.send(msg);
+                                }
+                                Err(e) => {
+                                    eprintln!("[Client Reader] Error reading message: {}", e);
+                                    break;
+                                }
+                            }
+                        }
+                    });
+
+                    // NOTE: send половина stream не используется в этой архитектуре
+                    drop(send);
+                }
+                Err(e) => {
+                    eprintln!("[Client Reader] Connection closed: {}", e);
+                    break;
+                }
+            }
+        }
+        println!("[Client Reader] Stopped");
+    });
+
+    // Writer task: отправляет сообщения серверу
+    tokio::spawn(async move {
+        // Открываем би-directional stream для отправки
+        match connection.open_bi().await {
+            Ok((mut send, _recv)) => {
+                while let Some(msg) = outgoing_rx.recv().await {
+                    if let Err(e) =
+                        super::transport::quic_client::write_message(&mut send, &msg).await
+                    {
+                        eprintln!("[Client Writer] Error writing message: {}", e);
+                        break;
+                    }
+                }
+                let _ = send.finish();
+            }
+            Err(e) => {
+                eprintln!("[Client Writer] Failed to open stream: {}", e);
+            }
+        }
+        println!("[Client Writer] Stopped");
+    });
 }
 
 #[cfg(test)]
@@ -116,6 +214,7 @@ mod tests {
 
     #[test]
     fn test_use_legacy_flag() {
-        assert!(use_legacy_networking());
+        // QUIC networking готов к использованию
+        assert!(!use_legacy_networking());
     }
 }
