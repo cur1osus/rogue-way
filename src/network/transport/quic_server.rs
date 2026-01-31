@@ -38,7 +38,9 @@ impl QuicServer {
         })
     }
 
-    /// Запускает accept loop и outgoing dispatcher
+    /// Запускает accept loop для приёма входящих подключений
+    ///
+    /// NOTE: Outgoing dispatcher запускается отдельно (в quic_integration или game_server)
     pub fn spawn_loops(self: Arc<Self>) {
         // Accept loop
         let endpoint = self.endpoint.clone();
@@ -67,19 +69,6 @@ impl QuicServer {
                 }
             }
         });
-
-        // Outgoing dispatcher: распределяет сообщения по connections
-        let mut outgoing_rx = self
-            .channels
-            .outgoing_rx
-            .as_ref()
-            .expect("outgoing_rx already taken - call take_outgoing_rx first");
-
-        // FIXME: Нужно вызвать take_outgoing_rx() перед spawn_loops
-        // Временно используем clone через Arc<Mutex<>>
-
-        // Упрощенная версия: dispatcher будет создан в другом месте
-        // Пока просто оставим заглушку
     }
 }
 
