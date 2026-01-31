@@ -25,10 +25,11 @@ pub use xp_sprites::*;
 use bevy::prelude::*;
 
 /// Накопитель времени для fixed timestep физики
+/// Обновляется в Update для интерполяции между fixed timesteps
 #[derive(Resource, Default)]
 pub struct PhysicsAccumulator {
     pub accumulator: f32,
 }
 
-/// Фиксированный временной шаг для физики (60 Hz)
-pub const FIXED_TIMESTEP: f32 = 1.0 / 60.0;
+/// Фиксированный временной шаг для физики (30 Hz - соответствует FixedUpdate)
+pub const FIXED_TIMESTEP: f32 = 1.0 / 30.0;

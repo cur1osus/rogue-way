@@ -181,6 +181,7 @@ pub fn build_base_app() -> App {
     .add_systems(
         Update,
         (
+            update_physics_accumulator,
             input_system,
             enemy_facing_system,
             interpolation_system,
@@ -325,4 +326,16 @@ fn set_window_icon(
 
     window.set_window_icon(Some(icon));
     *has_set = true;
+}
+
+/// Обновляет PhysicsAccumulator для интерполяции между fixed timesteps
+///
+/// Использует Time<Fixed>::overstep_fraction() для получения alpha [0.0, 1.0]
+/// который показывает, как далеко мы между текущим и следующим fixed update
+fn update_physics_accumulator(
+    mut accumulator: ResMut<PhysicsAccumulator>,
+    fixed_time: Res<Time<Fixed>>,
+) {
+    // overstep_fraction() возвращает 0.0 в начале fixed step, 1.0 в конце
+    accumulator.accumulator = fixed_time.overstep_fraction() * FIXED_TIMESTEP;
 }
